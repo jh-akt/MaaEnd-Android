@@ -1,0 +1,91 @@
+package com.maaend.android.model
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+enum class TaskTier {
+    MVP,
+    STRETCH,
+}
+
+@Serializable
+data class TaskDescriptor(
+    val id: String,
+    val label: String,
+    val description: String,
+    val entry: String,
+    val groups: List<String>,
+    val controllers: List<String>,
+    val tier: TaskTier,
+)
+
+@Serializable
+data class PresetDescriptor(
+    val id: String,
+    val label: String,
+    val description: String,
+    val taskIds: List<String>,
+    val tier: TaskTier,
+)
+
+@Serializable
+data class ResourceDescriptor(
+    val id: String,
+    val label: String,
+)
+
+@Serializable
+data class CatalogSnapshot(
+    val tasks: List<TaskDescriptor> = emptyList(),
+    val presets: List<PresetDescriptor> = emptyList(),
+    val resources: List<ResourceDescriptor> = emptyList(),
+)
+
+@Serializable
+data class RunRequest(
+    val taskId: String? = null,
+    val presetId: String? = null,
+    val sequenceTaskIds: List<String> = emptyList(),
+    val resourceName: String = "官服",
+    val logLevel: String = "info",
+    val optionOverridesJson: String? = null,
+)
+
+@Serializable
+enum class RunSessionPhase {
+    Idle,
+    Preparing,
+    Running,
+    Stopping,
+    Completed,
+    Failed,
+}
+
+@Serializable
+data class FailureArtifact(
+    val taskId: String? = null,
+    val screenshotPath: String? = null,
+    val diagnosticsPath: String? = null,
+    val occurredAt: Long = 0L,
+)
+
+@Serializable
+data class RuntimeCapabilities(
+    val hasBundledGoService: Boolean = false,
+    val hasBundledMaaFramework: Boolean = false,
+    val canFallbackOpenGame: Boolean = true,
+)
+
+@Serializable
+data class RuntimeStateSnapshot(
+    val phase: RunSessionPhase = RunSessionPhase.Idle,
+    val runtimePrepared: Boolean = false,
+    val runtimeRoot: String? = null,
+    val currentTaskId: String? = null,
+    val lastMessage: String = "",
+    val lastPing: String = "",
+    val recentLogs: List<String> = emptyList(),
+    val capabilities: RuntimeCapabilities = RuntimeCapabilities(),
+    val lastFailure: FailureArtifact? = null,
+    val lastDiagnosticsPath: String? = null,
+)
