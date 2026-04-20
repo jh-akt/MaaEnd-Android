@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">MaaEnd Android</string>
+    <string name="app_name">MaaEnd</string>
     <string name="home_title">主页</string>
     <string name="tasks_title">任务</string>
     <string name="presets_title">预设</string>

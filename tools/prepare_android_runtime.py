@@ -60,7 +60,7 @@ def stage_go_binary(go_exe: str, source_dir: Path, output_path: Path) -> Path:
         "CXX": cxx,
     }
     run(
-        [go_exe, "build", "-o", str(output_path), "."],
+        [go_exe, "build", "-trimpath", "-o", str(output_path), "."],
         cwd=source_dir,
         env=env,
     )

@@ -117,8 +117,10 @@ python3 - <<'PY'
 from pathlib import Path
 from PIL import Image
 
-src = Path('/workspace/MaaEnd/assets/resource_adb/image/SceneManager/ShoppingEntry.png')
-out = Path('/workspace/MaaEnd-Android/runtime/resource_adb/image/SceneManager/ShoppingEntryBottomHalf.png')
+repo_root = Path.cwd()
+maaend_root = repo_root.parent / 'MaaEnd'
+src = maaend_root / 'assets/resource_adb/image/SceneManager/ShoppingEntry.png'
+out = repo_root / 'runtime/resource_adb/image/SceneManager/ShoppingEntryBottomHalf.png'
 
 img = Image.open(src).convert('RGBA')
 top = img.height // 2
@@ -158,9 +160,11 @@ python3 - <<'PY'
 from pathlib import Path
 from PIL import Image
 
-adb_src = Path('/workspace/MaaEnd/assets/resource_adb/image/SceneManager/ShoppingEntry.png')
-res2_src = Path('/workspace/MaaEnd/assets/resource/image/SceneManager/ShoppingEntry2.png')
-out = Path('/workspace/MaaEnd-Android/runtime/resource_adb/image/SceneManager/ShoppingEntryInverted.png')
+repo_root = Path.cwd()
+maaend_root = repo_root.parent / 'MaaEnd'
+adb_src = maaend_root / 'assets/resource_adb/image/SceneManager/ShoppingEntry.png'
+res2_src = maaend_root / 'assets/resource/image/SceneManager/ShoppingEntry2.png'
+out = repo_root / 'runtime/resource_adb/image/SceneManager/ShoppingEntryInverted.png'
 
 adb_img = Image.open(adb_src).convert('RGBA')
 res2 = Image.open(res2_src).convert('RGBA')
@@ -209,8 +213,9 @@ python3 - <<'PY'
 from pathlib import Path
 from PIL import Image
 
-src = Path('/workspace/MaaEnd-Android/runtime/resource_adb/image/SceneManager/ShoppingEntryInverted.png')
-out = Path('/workspace/MaaEnd-Android/runtime/resource_adb/image/SceneManager/ShoppingEntryInvertedBottomHalf.png')
+repo_root = Path.cwd()
+src = repo_root / 'runtime/resource_adb/image/SceneManager/ShoppingEntryInverted.png'
+out = repo_root / 'runtime/resource_adb/image/SceneManager/ShoppingEntryInvertedBottomHalf.png'
 
 img = Image.open(src).convert('RGBA')
 top = img.height // 2

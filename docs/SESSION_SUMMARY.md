@@ -1,8 +1,8 @@
 # MaaEnd Android Session Summary
 
 Date: 2026-04-19  
-Workspace: `/workspace/MaaEnd-Android`  
-Upstream assets repo: `/workspace/MaaEnd`  
+Workspace: repository root (`MaaEnd-Android`)  
+Upstream assets repo: sibling `../MaaEnd` checkout  
 Goal of this session: make Android build, root runtime, preview window, task configuration, and MaaFramework task execution usable without re-hitting the same packaging/runtime traps.
 
 ## 1. Read This First Next Session
@@ -73,7 +73,7 @@ Root cause:
 
 Rule:
 
-- If task UI is empty, first check that `/workspace/MaaEnd/assets` exists before debugging parser/UI logic.
+- If task UI is empty, first check that `../MaaEnd/assets` exists before debugging parser/UI logic.
 
 ### Pitfall 3: runtime missing was a packaging problem, not a task problem
 
@@ -344,7 +344,7 @@ Task config / persistence:
 
 Upstream Go service changes used for debugging:
 
-- `/workspace/MaaEnd/agent/go-service/common/autoaltclick/action.go`
+- `../MaaEnd/agent/go-service/common/autoaltclick/action.go`
 
 ## 6. Commands That Were Actually Useful
 
@@ -362,13 +362,13 @@ interpreter /system/bin/linker64
 
 ### Correct Android `go-service` build command
 
-Run inside `/workspace/MaaEnd/agent/go-service`:
+Run inside `../MaaEnd/agent/go-service`:
 
 ```bash
 CC="$HOME/Library/Android/sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android30-clang" \
 CXX="$HOME/Library/Android/sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android30-clang++" \
 GOOS=android GOARCH=arm64 CGO_ENABLED=1 \
-go build -o /workspace/MaaEnd-Android/runtime/agent/go-service .
+go build -o ../../MaaEnd-Android/runtime/agent/go-service .
 ```
 
 Reason:
