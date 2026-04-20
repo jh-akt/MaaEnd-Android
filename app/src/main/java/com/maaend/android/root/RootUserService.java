@@ -5,12 +5,15 @@ import android.app.Application;
 import android.app.Instrumentation;
 import android.content.Context;
 import android.os.IBinder;
+import android.util.Log;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 public final class RootUserService {
+
+    private static final String TAG = "RootUserService";
 
     private RootUserService() {
     }
@@ -22,12 +25,15 @@ public final class RootUserService {
         }
 
         int userId = parsed.uid / 100000;
+        String appName = parsed.debugName != null ? parsed.debugName : parsed.packageName + ":root_runtime";
         try {
             Object activityThread = createActivityThread();
             Context systemContext = getSystemContext(activityThread);
             if (systemContext == null) {
                 throw new IllegalStateException("system context is null");
             }
+
+            setAppName(appName, userId);
 
             Context packageContext = createPackageContextAsUser(systemContext, parsed.packageName, userId);
             Application application = makeApplication(activityThread, packageContext);
@@ -37,7 +43,8 @@ public final class RootUserService {
             IBinder service = instantiateService(serviceClass, constructorContext);
 
             return new CreatedService(service, parsed.token, parsed.packageName, userId);
-        } catch (Throwable ignored) {
+        } catch (Throwable tr) {
+            Log.e(TAG, "Unable to start root service " + parsed.packageName + "/" + parsed.className, tr);
             return null;
         }
     }
@@ -100,6 +107,17 @@ public final class RootUserService {
         }
     }
 
+    @SuppressLint("PrivateApi")
+    private static void setAppName(String name, int userId) {
+        try {
+            Class<?> cls = Class.forName("android.ddm.DdmHandleAppName");
+            Method method = cls.getDeclaredMethod("setAppName", String.class, int.class);
+            method.invoke(null, name, userId);
+        } catch (Throwable tr) {
+            Log.w(TAG, "setAppName failed", tr);
+        }
+    }
+
     private static IBinder instantiateService(Class<?> serviceClass, Context context) throws Exception {
         try {
             Constructor<?> constructor = serviceClass.getConstructor(Context.class);
@@ -114,11 +132,12 @@ public final class RootUserService {
     public record CreatedService(IBinder service, String token, String packageName, int userId) {
     }
 
-    private record ParsedArgs(String token, String packageName, String className, int uid) {
+    private record ParsedArgs(String token, String packageName, String className, int uid, String debugName) {
         static ParsedArgs parse(String[] args) {
             String token = null;
             String packageName = null;
             String className = null;
+            String debugName = null;
             int uid = -1;
 
             for (String arg : args) {
@@ -130,13 +149,16 @@ public final class RootUserService {
                     className = arg.substring(8);
                 } else if (arg.startsWith("--uid=")) {
                     uid = Integer.parseInt(arg.substring(6));
+                } else if (arg.startsWith("--debug-name=")) {
+                    debugName = arg.substring(13);
                 }
             }
 
             if (token == null || packageName == null || className == null || uid < 0) {
+                Log.e(TAG, "Missing required launcher args");
                 return null;
             }
-            return new ParsedArgs(token, packageName, className, uid);
+            return new ParsedArgs(token, packageName, className, uid, debugName);
         }
     }
 }

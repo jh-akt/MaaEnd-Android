@@ -1,0 +1,42 @@
+{
+    "SceneEnterMenuShop": {
+        "next": [
+            "__ScenePrivateWorldEnterMenuEntryShopClick",
+            "[JumpBack]SceneAnyEnterWorld"
+        ]
+    },
+    "__ScenePrivateWorldEnterMenuShop": {
+        "recognition": {
+            "type": "TemplateMatch",
+            "param": {
+                "roi": [
+                    -80,
+                    0,
+                    80,
+                    90
+                ],
+                "template": [
+                    "SceneManager/WorldMenu.png"
+                ],
+                "green_mask": true
+            }
+        }
+    },
+    "__ScenePrivateWorldEnterMenuEntryShopClick": {
+        "recognition": {
+            "type": "TemplateMatch",
+            "param": {
+                "roi": [
+                    700,
+                    0,
+                    425,
+                    80
+                ],
+                "template": [
+                    "SceneManager/ShoppingEntryBottomHalf.png",
+                    "SceneManager/ShoppingEntryInvertedBottomHalf.png"
+                ]
+            }
+        }
+    }
+}

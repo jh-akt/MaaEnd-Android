@@ -9,6 +9,44 @@ enum class TaskTier {
 }
 
 @Serializable
+enum class TaskOptionType {
+    Switch,
+    Checkbox,
+    Select,
+    Input,
+}
+
+@Serializable
+data class TaskOptionInput(
+    val name: String,
+    val label: String,
+    val description: String = "",
+    val defaultValue: String = "",
+    val verifyRegex: String = "",
+    val pipelineType: String = "",
+)
+
+@Serializable
+data class TaskOptionCase(
+    val name: String,
+    val label: String,
+    val pipelineOverrideJson: String,
+    val nestedOptions: List<TaskOptionDescriptor> = emptyList(),
+)
+
+@Serializable
+data class TaskOptionDescriptor(
+    val id: String,
+    val type: TaskOptionType,
+    val label: String,
+    val description: String = "",
+    val defaultCaseNames: List<String> = emptyList(),
+    val cases: List<TaskOptionCase> = emptyList(),
+    val inputs: List<TaskOptionInput> = emptyList(),
+    val pipelineOverrideJson: String = "{}",
+)
+
+@Serializable
 data class TaskDescriptor(
     val id: String,
     val label: String,
@@ -17,6 +55,7 @@ data class TaskDescriptor(
     val groups: List<String>,
     val controllers: List<String>,
     val tier: TaskTier,
+    val options: List<TaskOptionDescriptor> = emptyList(),
 )
 
 @Serializable
@@ -49,6 +88,7 @@ data class RunRequest(
     val resourceName: String = "官服",
     val logLevel: String = "info",
     val optionOverridesJson: String? = null,
+    val optionOverridesByTask: Map<String, String> = emptyMap(),
 )
 
 @Serializable

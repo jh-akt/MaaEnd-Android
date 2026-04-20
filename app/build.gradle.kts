@@ -10,11 +10,25 @@ plugins {
 val runtimeDir = rootProject.layout.projectDirectory.dir("runtime")
 val maaendRepoDir = rootProject.layout.projectDirectory.dir("../MaaEnd")
 val generatedAssetsDir = layout.buildDirectory.dir("generated/assets")
+val generatedJniLibsDir = layout.buildDirectory.dir("generated/jniLibs")
 
 val prepareBundledRuntimeAssets by tasks.registering(Sync::class) {
     from(runtimeDir)
+    from(maaendRepoDir.dir("assets/resource/pipeline/Common/__Private")) {
+        into("private_pipeline/resource/CommonPrivate")
+    }
+    from(maaendRepoDir.dir("assets/resource_adb/pipeline/Common/__Private")) {
+        into("private_pipeline/resource_adb/CommonPrivate")
+    }
     into(generatedAssetsDir.map { it.dir("bundled_runtime") })
     includeEmptyDirs = true
+}
+
+val prepareBundledRuntimeJniLibs by tasks.registering(Sync::class) {
+    from(runtimeDir.dir("maafw"))
+    into(generatedJniLibsDir.map { it.dir("arm64-v8a") })
+    include("*.so")
+    includeEmptyDirs = false
 }
 
 android {
@@ -67,6 +81,7 @@ android {
         maaendRepoDir.dir("assets"),
         generatedAssetsDir,
     )
+    sourceSets.getByName("main").jniLibs.srcDirs(generatedJniLibsDir)
 
     packaging {
         jniLibs {
@@ -95,6 +110,7 @@ kotlin {
 
 tasks.named("preBuild") {
     dependsOn(prepareBundledRuntimeAssets)
+    dependsOn(prepareBundledRuntimeJniLibs)
 }
 
 dependencies {
@@ -114,6 +130,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("com.github.topjohnwu.libsu:core:6.0.0")
+    implementation("net.java.dev.jna:jna:5.18.1") { artifact { type = "aar" } }
 
     testImplementation("junit:junit:4.13.2")
 }

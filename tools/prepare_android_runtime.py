@@ -11,6 +11,26 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MAAEND_ROOT = PROJECT_ROOT.parent / "MaaEnd"
 ANDROID_RUNTIME_DIR = PROJECT_ROOT / "runtime"
+RUNNER_SOURCE_DIR = PROJECT_ROOT / "tools" / "go-runner"
+
+
+def detect_android_clang() -> tuple[str, str] | tuple[None, None]:
+    sdk_root = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
+    if not sdk_root:
+        sdk_root = str(Path.home() / "Library" / "Android" / "sdk")
+    ndk_root = Path(sdk_root) / "ndk"
+    if not ndk_root.exists():
+        return None, None
+
+    versions = sorted([p for p in ndk_root.iterdir() if p.is_dir()], reverse=True)
+    for version_dir in versions:
+        toolchain = version_dir / "toolchains" / "llvm" / "prebuilt" / "darwin-x86_64" / "bin"
+        cc = toolchain / "aarch64-linux-android24-clang"
+        cxx = toolchain / "aarch64-linux-android24-clang++"
+        if cc.exists() and cxx.exists():
+            return str(cc), str(cxx)
+
+    return None, None
 
 
 def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -25,14 +45,19 @@ def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None =
         raise RuntimeError(f"command failed ({process.returncode}): {' '.join(cmd)}")
 
 
-def stage_go_service(go_exe: str, source_dir: Path, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "go-service"
+def stage_go_binary(go_exe: str, source_dir: Path, output_path: Path) -> Path:
+    cc, cxx = detect_android_clang()
+    if not cc or not cxx:
+        raise RuntimeError("Android NDK clang not found. Set ANDROID_SDK_ROOT/ANDROID_HOME correctly.")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
         "GOOS": "android",
         "GOARCH": "arm64",
-        "CGO_ENABLED": "0",
+        "CGO_ENABLED": "1",
+        "CC": cc,
+        "CXX": cxx,
     }
     run(
         [go_exe, "build", "-o", str(output_path), "."],
@@ -40,6 +65,17 @@ def stage_go_service(go_exe: str, source_dir: Path, output_dir: Path) -> Path:
         env=env,
     )
     return output_path
+
+
+def stage_go_service(go_exe: str, source_dir: Path, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "go-service"
+    return stage_go_binary(go_exe, source_dir, output_path)
+
+
+def stage_runner(go_exe: str, source_dir: Path, output_dir: Path) -> Path:
+    output_path = output_dir / "maa-go-runner"
+    return stage_go_binary(go_exe, source_dir, output_path)
 
 
 def stage_maafw(source_dir: Path, output_dir: Path) -> Path:
@@ -89,6 +125,8 @@ def main() -> int:
     if not args.skip_go:
         go_binary = stage_go_service(args.go_exe, go_service_dir, output_dir / "agent")
         manifest["go_service"] = str(go_binary)
+        runner_binary = stage_runner(args.go_exe, RUNNER_SOURCE_DIR, output_dir / "agent")
+        manifest["runner"] = str(runner_binary)
 
     if args.maafw_dir:
         maafw_dir = stage_maafw(args.maafw_dir, output_dir / "maafw")

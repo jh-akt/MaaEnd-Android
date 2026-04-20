@@ -20,6 +20,7 @@ class RootRuntimeConnector(
         val deferred = RootServiceBootstrapRegistry.register(token)
 
         runCatching {
+            cleanupStaleRootRuntimes()
             val command = buildStartCommand(token)
             val result = Shell.cmd(command).exec()
             if (result.code != 0) {
@@ -75,6 +76,16 @@ class RootRuntimeConnector(
 
     private fun shellQuote(value: String): String {
         return "'${value.replace("'", "'\"'\"'")}'"
+    }
+
+    private fun cleanupStaleRootRuntimes() {
+        val processName = "${context.packageName}:root_runtime"
+        val cleanupCommand = """
+            for pid in ${'$'}(ps -A | grep '$processName' | awk '{print ${'$'}2}'); do
+                kill ${'$'}pid >/dev/null 2>&1 || true
+            done
+        """.trimIndent()
+        Shell.cmd(cleanupCommand).exec()
     }
 
     private companion object {

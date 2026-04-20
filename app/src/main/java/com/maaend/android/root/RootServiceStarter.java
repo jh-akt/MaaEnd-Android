@@ -4,9 +4,11 @@ import android.os.Binder;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Parcel;
+import android.util.Log;
 
 public final class RootServiceStarter {
 
+    private static final String TAG = "RootServiceStarter";
     private static final int DESTROY_TRANSACTION_CODE = 16777115;
 
     private RootServiceStarter() {
@@ -45,11 +47,13 @@ public final class RootServiceStarter {
 
         try {
             lifecycleBinder.linkToDeath(() -> {
+                Log.i(TAG, "App process died, destroying root runtime");
                 destroyService(createdService.service());
                 System.exit(0);
             }, 0);
             return true;
-        } catch (Throwable ignored) {
+        } catch (Throwable tr) {
+            Log.e(TAG, "Failed to link app lifecycle binder", tr);
             return false;
         }
     }
@@ -67,7 +71,8 @@ public final class RootServiceStarter {
                 data.writeInterfaceToken(descriptor);
             }
             service.transact(DESTROY_TRANSACTION_CODE, data, reply, Binder.FLAG_ONEWAY);
-        } catch (Throwable ignored) {
+        } catch (Throwable tr) {
+            Log.w(TAG, "destroy root runtime failed", tr);
         } finally {
             data.recycle();
             reply.recycle();
