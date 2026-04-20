@@ -38,7 +38,6 @@ import kotlinx.serialization.json.put
 enum class MaaEndTab {
     HOME,
     TASKS,
-    RUNNING,
     SETTINGS,
     LOGS,
 }
@@ -74,6 +73,7 @@ class MainViewModel(
 
     private var service: IRootRuntimeService? = null
     private var pollJob: Job? = null
+    private var connectJob: Job? = null
     private var previewSurface: Surface? = null
     private val inputPlaceholderRegex = Regex("\\{([A-Za-z0-9_]+)\\}")
 
@@ -83,11 +83,11 @@ class MainViewModel(
                 Log.e(TAG, "Failed to load app settings", error)
                 AppSettings()
             }
-        var lastMessage = "Android Root-only MVP scaffold ready"
+        var lastMessage = "Root 运行环境已就绪"
         val catalog = runCatching { catalogLoader.load() }
             .getOrElse { error ->
                 Log.e(TAG, "Failed to load interface catalog", error)
-                lastMessage = "Catalog assets missing or invalid: ${error.message ?: error::class.java.simpleName}"
+                lastMessage = "接口资源缺失或格式异常：${error.message ?: error::class.java.simpleName}"
                 CatalogSnapshot()
             }
         val rootAvailable = runCatching { RootManager.isAvailable() }
@@ -114,6 +114,9 @@ class MainViewModel(
             rootGranted = rootGranted,
             lastMessage = lastMessage,
         )
+        if (rootAvailable) {
+            requestRootAndConnectSilently()
+        }
     }
 
     fun selectTab(tab: MaaEndTab) {
@@ -145,76 +148,26 @@ class MainViewModel(
     }
 
     fun requestRootAndConnect() {
-        viewModelScope.launch {
-            val existingService = service
-            if (existingService != null) {
-                val ping = runCatching { existingService.ping() }.getOrNull()
-                if (!ping.isNullOrBlank()) {
-                    refreshRuntimeState()
-                    _uiState.value = _uiState.value.copy(
-                        busy = false,
-                        rootAvailable = true,
-                        rootGranted = true,
-                        rootConnected = true,
-                        servicePing = ping,
-                        lastMessage = "Root runtime already connected",
-                    )
-                    return@launch
-                }
-
-                rootConnector.disconnect(existingService)
-                service = null
-            }
-
-            setBusy(true, "Requesting Root")
-            val granted = RootManager.requestPermission()
-            if (!granted) {
-                _uiState.value = _uiState.value.copy(
-                    busy = false,
-                    rootGranted = false,
-                    lastMessage = "Root permission denied",
-                )
-                return@launch
-            }
-
-            val result = rootConnector.connect()
-            result.onSuccess { runtimeService ->
-                service = runtimeService
-                previewSurface?.let { surface ->
-                    runCatching { runtimeService.setMonitorSurface(surface) }
-                }
-                _uiState.value = _uiState.value.copy(
-                    busy = false,
-                    rootAvailable = true,
-                    rootGranted = true,
-                    rootConnected = true,
-                    servicePing = runtimeService.ping(),
-                    lastMessage = "Root runtime connected",
-                )
-                startPolling()
-            }.onFailure {
-                _uiState.value = _uiState.value.copy(
-                    busy = false,
-                    rootConnected = false,
-                    lastMessage = "Failed to connect Root runtime: ${it.message}",
-                )
-            }
+        if (connectJob?.isActive == true) {
+            return
+        }
+        connectJob = viewModelScope.launch {
+            connectRootRuntime(silent = false)
         }
     }
 
     fun prepareRuntime() {
         viewModelScope.launch {
-            val runtimeService = service ?: run {
-                _uiState.value = _uiState.value.copy(lastMessage = "Root runtime not connected")
+            val runtimeService = requireRuntimeService() ?: run {
                 return@launch
             }
 
-            setBusy(true, "Preparing runtime")
+            setBusy(true, "准备运行时中")
             val prepared = runCatching { runtimeService.prepareRuntime() }.getOrDefault(false)
             refreshRuntimeState()
             _uiState.value = _uiState.value.copy(
                 busy = false,
-                lastMessage = if (prepared) "Runtime prepared" else "Runtime prepare failed",
+                lastMessage = if (prepared) "运行时已准备完成" else "运行时准备失败",
             )
         }
     }
@@ -277,10 +230,11 @@ class MainViewModel(
 
     fun exportDiagnostics() {
         viewModelScope.launch {
-            val path = runCatching { service?.exportDiagnostics().orEmpty() }.getOrElse { "" }
+            val runtimeService = requireRuntimeService() ?: return@launch
+            val path = runCatching { runtimeService.exportDiagnostics().orEmpty() }.getOrElse { "" }
             refreshRuntimeState()
             if (path.isNotBlank()) {
-                _uiState.value = _uiState.value.copy(lastMessage = "Diagnostics exported: $path")
+                _uiState.value = _uiState.value.copy(lastMessage = "诊断包已导出：$path")
             }
         }
     }
@@ -293,14 +247,12 @@ class MainViewModel(
 
     fun startWindowedGame() {
         viewModelScope.launch {
-            val runtimeService = service ?: run {
-                _uiState.value = _uiState.value.copy(lastMessage = "Root runtime not connected")
-                return@launch
-            }
+            val runtimeService = requireRuntimeService() ?: return@launch
             val ok = runCatching { runtimeService.startWindowedGame() }.getOrDefault(false)
+            refreshRuntimeState()
             _uiState.value = _uiState.value.copy(
-                lastMessage = if (ok) "Windowed game started" else "Failed to start windowed game",
-                activeTab = MaaEndTab.RUNNING,
+                lastMessage = if (ok) "已在应用内拉起窗口模式" else "窗口模式启动失败",
+                activeTab = MaaEndTab.TASKS,
             )
         }
     }
@@ -323,18 +275,15 @@ class MainViewModel(
 
     private fun startRun(request: RunRequest) {
         viewModelScope.launch {
-            val runtimeService = service ?: run {
-                _uiState.value = _uiState.value.copy(lastMessage = "Root runtime not connected")
-                return@launch
-            }
+            val runtimeService = requireRuntimeService() ?: return@launch
 
             val started = runCatching {
                 runtimeService.startRun(json.encodeToString(request))
             }.getOrDefault(false)
             refreshRuntimeState()
             _uiState.value = _uiState.value.copy(
-                lastMessage = if (started) "Run started" else "Run failed to start",
-                activeTab = MaaEndTab.RUNNING,
+                lastMessage = if (started) "任务已开始执行" else "任务启动失败",
+                activeTab = MaaEndTab.TASKS,
             )
         }
     }
@@ -358,6 +307,117 @@ class MainViewModel(
                 servicePing = runtimeService.ping(),
             )
         }
+    }
+
+    private fun requestRootAndConnectSilently() {
+        if (connectJob?.isActive == true) {
+            return
+        }
+        connectJob = viewModelScope.launch {
+            connectRootRuntime(silent = true)
+        }
+    }
+
+    private suspend fun requireRuntimeService(): IRootRuntimeService? {
+        currentAliveService()?.let { return it }
+        connectJob?.takeIf { it.isActive }?.join()
+        currentAliveService()?.let { return it }
+        return connectRootRuntime(silent = false)
+    }
+
+    private suspend fun connectRootRuntime(silent: Boolean): IRootRuntimeService? {
+        currentAliveService()?.let { runtimeService ->
+            if (!silent) {
+                _uiState.value = _uiState.value.copy(lastMessage = "Root Runtime 已连接")
+            }
+            return runtimeService
+        }
+
+        val rootAvailable = runCatching { RootManager.isAvailable() }.getOrDefault(false)
+        _uiState.value = _uiState.value.copy(
+            busy = true,
+            rootAvailable = rootAvailable,
+            rootConnected = false,
+            servicePing = "",
+        )
+
+        if (!rootAvailable) {
+            _uiState.value = _uiState.value.copy(
+                busy = false,
+                rootGranted = false,
+                rootConnected = false,
+                lastMessage = if (silent) _uiState.value.lastMessage else "未检测到可用 Root",
+            )
+            return null
+        }
+
+        val granted = RootManager.requestPermission()
+        if (!granted) {
+            _uiState.value = _uiState.value.copy(
+                busy = false,
+                rootGranted = false,
+                rootConnected = false,
+                lastMessage = if (silent) _uiState.value.lastMessage else "Root 授权未通过",
+            )
+            return null
+        }
+
+        val result = rootConnector.connect()
+        return result.onSuccess { runtimeService ->
+            service = runtimeService
+            previewSurface?.let { surface ->
+                runCatching { runtimeService.setMonitorSurface(surface) }
+            }
+            _uiState.value = _uiState.value.copy(
+                busy = false,
+                rootAvailable = true,
+                rootGranted = true,
+                rootConnected = true,
+                servicePing = runtimeService.ping(),
+                lastMessage = if (silent) {
+                    "已静默获取 Root 并自动连接 Runtime"
+                } else {
+                    "Root Runtime 已连接"
+                },
+            )
+            startPolling()
+        }.onFailure {
+            _uiState.value = _uiState.value.copy(
+                busy = false,
+                rootAvailable = true,
+                rootGranted = true,
+                rootConnected = false,
+                lastMessage = if (silent) {
+                    "自动连接 Runtime 失败，可手动重试"
+                } else {
+                    "连接 Root Runtime 失败：${it.message}"
+                },
+            )
+        }.getOrNull()
+    }
+
+    private suspend fun currentAliveService(): IRootRuntimeService? {
+        val existingService = service ?: return null
+        val ping = runCatching { existingService.ping() }.getOrNull()
+        if (!ping.isNullOrBlank()) {
+            refreshRuntimeState()
+            _uiState.value = _uiState.value.copy(
+                busy = false,
+                rootAvailable = true,
+                rootGranted = true,
+                rootConnected = true,
+                servicePing = ping,
+            )
+            return existingService
+        }
+
+        rootConnector.disconnect(existingService)
+        service = null
+        _uiState.value = _uiState.value.copy(
+            rootConnected = false,
+            servicePing = "",
+        )
+        return null
     }
 
     private fun selectedTask(): TaskDescriptor? {
