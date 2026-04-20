@@ -1,5 +1,8 @@
 .gradle/
 local.properties
+key.properties
+*.jks
+*.keystore
 app/build/
 runtime/agent/go-service
 runtime/maafw/

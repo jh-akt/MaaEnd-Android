@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.gradle.api.tasks.Sync
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -12,6 +13,12 @@ val runtimeDir = rootProject.layout.projectDirectory.dir("runtime")
 val maaendRepoDir = rootProject.layout.projectDirectory.dir("../MaaEnd")
 val generatedAssetsDir = layout.buildDirectory.dir("generated/assets")
 val generatedJniLibsDir = layout.buildDirectory.dir("generated/jniLibs")
+val signingPropertiesFile = rootProject.file("key.properties")
+val signingProperties = Properties().apply {
+    if (signingPropertiesFile.exists()) {
+        signingPropertiesFile.inputStream().use(::load)
+    }
+}
 
 val prepareBundledRuntimeAssets by tasks.registering(Sync::class) {
     from(runtimeDir)
@@ -49,12 +56,26 @@ android {
         }
     }
 
+    signingConfigs {
+        if (signingPropertiesFile.exists()) {
+            create("release") {
+                storeFile = file(signingProperties.getProperty("storeFile"))
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
         }
         release {
             isMinifyEnabled = false
+            if (signingPropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
