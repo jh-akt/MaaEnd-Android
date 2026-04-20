@@ -681,7 +681,7 @@ private fun PreviewCard(
                 }
             }
             Text(
-                text = "窗口固定为 1920x1080。展开逻辑参考 MAA-Meow，直接在当前页面盖全屏层。",
+                text = "窗口固定为 1280x720。展开逻辑参考 MAA-Meow，直接在当前页面盖全屏层。",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
