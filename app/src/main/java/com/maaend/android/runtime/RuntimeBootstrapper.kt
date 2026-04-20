@@ -2,8 +2,17 @@ package com.maaend.android.runtime
 
 import android.content.Context
 import android.content.res.AssetManager
+import com.maaend.android.catalog.JsonWithComments
 import com.maaend.android.model.RuntimeCapabilities
+import com.maaend.android.model.RuntimeLogChunk
 import java.io.File
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 
 data class RuntimePrepareResult(
     val runtimeRoot: File,
@@ -13,13 +22,14 @@ data class RuntimePrepareResult(
 
 object RuntimeBootstrapper {
     private const val RUNTIME_VERSION = "v1"
-    private val REQUIRED_ASSET_ENTRIES = listOf(
+    private val BASE_ASSET_ENTRIES = listOf(
         "interface.json",
         "locales",
         "tasks",
         "resource",
         "resource_adb",
     )
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     fun prepare(
         context: Context,
@@ -27,6 +37,7 @@ object RuntimeBootstrapper {
         runtimeRoot: File = defaultRuntimeRoot(context),
     ): RuntimePrepareResult {
         val assets = context.assets
+        val persistentRepoStatus = PersistentResourceRepositoryManager.ensureAvailable(context, logger::log)
 
         runtimeRoot.mkdirs()
         File(runtimeRoot, "logs").mkdirs()
@@ -34,15 +45,23 @@ object RuntimeBootstrapper {
         stopStaleAgentProcesses(runtimeRoot, logger)
         resetRuntimePayload(runtimeRoot, logger)
 
-        REQUIRED_ASSET_ENTRIES.forEach { entry ->
-            copyAssetEntry(assets, entry, File(runtimeRoot, entry), logger)
+        if (persistentRepoStatus.available) {
+            val repoRoot = PersistentResourceRepositoryManager.currentRoot(context)
+            collectRequiredRepoEntries(repoRoot).forEach { entry ->
+                copyFileEntry(File(repoRoot, entry), File(runtimeRoot, entry), logger)
+            }
+            logger.log("Runtime resources prepared from persistent GitHub repository")
+        } else {
+            collectRequiredAssetEntries(assets).forEach { entry ->
+                copyAssetEntry(assets, entry, File(runtimeRoot, entry), logger)
+            }
+            logger.log("Runtime resources prepared from bundled assets")
         }
 
         if (assetEntryExists(assets, "bundled_runtime")) {
             copyAssetEntry(assets, "bundled_runtime", runtimeRoot, logger)
         }
         overlayBundledPrivatePipeline(runtimeRoot, logger)
-        overlayBundledResourceAdb(runtimeRoot, logger)
 
         val goService = File(runtimeRoot, "agent/go-service")
         val maafwDir = File(runtimeRoot, "maafw")
@@ -71,6 +90,26 @@ object RuntimeBootstrapper {
         )
     }
 
+    private fun collectRequiredAssetEntries(assets: AssetManager): List<String> {
+        val entries = linkedSetOf<String>()
+        entries += BASE_ASSET_ENTRIES
+        runCatching {
+            val root = parseInterfaceRoot(assets)
+            collectAdditionalEntries(root).forEach { entries += it }
+        }
+        return entries.toList()
+    }
+
+    private fun collectRequiredRepoEntries(repoRoot: File): List<String> {
+        val entries = linkedSetOf<String>()
+        entries += BASE_ASSET_ENTRIES
+        runCatching {
+            val root = parseInterfaceRoot(repoRoot)
+            collectAdditionalEntries(root).forEach { entries += it }
+        }
+        return entries.toList()
+    }
+
     private fun assetEntryExists(assets: AssetManager, path: String): Boolean {
         return try {
             val entries = assets.list(path)
@@ -83,6 +122,41 @@ object RuntimeBootstrapper {
         } catch (_: Throwable) {
             false
         }
+    }
+
+    private fun parseInterfaceRoot(assets: AssetManager): JsonObject {
+        val text = assets.open("interface.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        return json.parseToJsonElement(JsonWithComments.stripLineComments(text)).jsonObject
+    }
+
+    private fun parseInterfaceRoot(repoRoot: File): JsonObject {
+        val text = File(repoRoot, "interface.json").readText()
+        return json.parseToJsonElement(JsonWithComments.stripLineComments(text)).jsonObject
+    }
+
+    private fun collectAdditionalEntries(root: JsonObject): List<String> {
+        val entries = linkedSetOf<String>()
+        root["resource"].asObjects().forEach { resource ->
+            stringArray(resource["path"]).forEach { entries += normalizeAssetPath(it) }
+        }
+        root["controller"].asObjects().forEach { controller ->
+            stringArray(controller["attach_resource_path"]).forEach { entries += normalizeAssetPath(it) }
+        }
+        return entries.toList()
+    }
+
+    private fun stringArray(element: kotlinx.serialization.json.JsonElement?): List<String> {
+        return (element as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            .orEmpty()
+    }
+
+    private fun JsonElement?.asObjects(): List<JsonObject> {
+        return (this as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+    }
+
+    private fun normalizeAssetPath(path: String): String {
+        return path.removePrefix("./")
     }
 
     private fun copyAssetEntry(
@@ -119,6 +193,31 @@ object RuntimeBootstrapper {
         logger.log("Extracted asset directory: $assetPath")
     }
 
+    private fun copyFileEntry(
+        source: File,
+        target: File,
+        logger: RuntimeLogger,
+    ) {
+        if (!source.exists()) {
+            return
+        }
+        if (source.isFile) {
+            target.parentFile?.mkdirs()
+            source.inputStream().use { input ->
+                target.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            return
+        }
+
+        target.mkdirs()
+        source.listFiles()?.forEach { child ->
+            copyFileEntry(child, File(target, child.name), logger)
+        }
+        logger.log("Copied repository directory: ${source.relativeTo(source.parentFile ?: source).path}")
+    }
+
     fun defaultRuntimeRoot(context: Context): File {
         return File("/data/local/tmp/${context.packageName}/maaend-runtime/$RUNTIME_VERSION")
     }
@@ -140,16 +239,6 @@ object RuntimeBootstrapper {
         }
         deleteRecursively(File(runtimeRoot, "maafw/plugins.disabled"))
         logger.log("Cleared stale runtime payload before prepare")
-    }
-
-    private fun overlayBundledResourceAdb(runtimeRoot: File, logger: RuntimeLogger) {
-        val overlayRoot = File(runtimeRoot, "bundled_runtime/resource_adb")
-        val targetRoot = File(runtimeRoot, "resource_adb")
-        if (!overlayRoot.exists()) {
-            return
-        }
-        copyDirectoryContents(overlayRoot, targetRoot)
-        logger.log("Overlayed bundled_runtime/resource_adb into resource_adb")
     }
 
     private fun overlayBundledPrivatePipeline(runtimeRoot: File, logger: RuntimeLogger) {
@@ -230,19 +319,57 @@ class RuntimeLogger(runtimeRoot: File) {
             createNewFile()
         }
     }
+    private val liveLines = ArrayDeque<LiveLogEntry>()
+    private var nextCursor = 0L
 
     @Synchronized
     fun log(message: String) {
-        logFile.appendText("${System.currentTimeMillis()} $message\n")
+        val line = "${System.currentTimeMillis()} $message"
+        logFile.appendText("$line\n")
+        nextCursor += 1L
+        liveLines.addLast(LiveLogEntry(cursor = nextCursor, line = line))
+        while (liveLines.size > MAX_IN_MEMORY_LINES) {
+            liveLines.removeFirst()
+        }
     }
 
     @Synchronized
     fun tail(maxLines: Int = 120): List<String> {
-        return logFile.takeIf { it.exists() }
-            ?.readLines()
-            ?.takeLast(maxLines)
-            ?: emptyList()
+        return liveLines.takeLast(maxLines).map { it.line }
+    }
+
+    @Synchronized
+    fun readChunk(offsetBytes: Long, maxBytes: Int = DEFAULT_CHUNK_BYTES): RuntimeLogChunk {
+        val oldestCursor = liveLines.firstOrNull()?.cursor?.minus(1L) ?: nextCursor
+        val reset = offsetBytes < oldestCursor || offsetBytes > nextCursor
+        val startCursor = if (reset) oldestCursor else offsetBytes
+        if (maxBytes <= 0) {
+            return RuntimeLogChunk(
+                nextOffsetBytes = nextCursor,
+                reset = reset,
+            )
+        }
+        val maxLines = maxBytes.coerceAtLeast(1)
+        val lines = liveLines.asSequence()
+            .filter { it.cursor > startCursor }
+            .take(maxLines)
+            .toList()
+        return RuntimeLogChunk(
+            nextOffsetBytes = lines.lastOrNull()?.cursor ?: nextCursor,
+            reset = reset,
+            lines = lines.map { it.line },
+        )
     }
 
     fun file(): File = logFile
+
+    private companion object {
+        const val DEFAULT_CHUNK_BYTES = 512
+        const val MAX_IN_MEMORY_LINES = 10_000
+    }
+
+    private data class LiveLogEntry(
+        val cursor: Long,
+        val line: String,
+    )
 }

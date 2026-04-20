@@ -14,7 +14,9 @@ interface IRootRuntimeService {
     boolean touchUp(int x, int y);
     int getWindowedDisplayId();
     void stopWindowedPreview();
+    boolean setDisplayPower(boolean on);
     String getState();
+    String readLogChunk(long offsetBytes, int maxBytes);
     String exportDiagnostics();
     oneway void destroy();
 }

@@ -11,8 +11,14 @@ import java.lang.reflect.Method;
 @SuppressLint("PrivateApi")
 public final class SurfaceControl {
 
+    public static final int POWER_MODE_OFF = 0;
+    public static final int POWER_MODE_NORMAL = 2;
+
     private static final Class<?> CLASS;
     private static Method getBuiltInDisplayMethod;
+    private static Method getPhysicalDisplayTokenMethod;
+    private static Method getPhysicalDisplayIdsMethod;
+    private static Method setDisplayPowerModeMethod;
 
     static {
         try {
@@ -97,6 +103,64 @@ public final class SurfaceControl {
             return (IBinder) method.invoke(null);
         } catch (ReflectiveOperationException e) {
             return null;
+        }
+    }
+
+    private static Method getGetPhysicalDisplayTokenMethod() throws NoSuchMethodException {
+        if (getPhysicalDisplayTokenMethod == null) {
+            getPhysicalDisplayTokenMethod = CLASS.getMethod("getPhysicalDisplayToken", long.class);
+        }
+        return getPhysicalDisplayTokenMethod;
+    }
+
+    public static IBinder getPhysicalDisplayToken(long physicalDisplayId) {
+        try {
+            Method method = getGetPhysicalDisplayTokenMethod();
+            return (IBinder) method.invoke(null, physicalDisplayId);
+        } catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
+    private static Method getGetPhysicalDisplayIdsMethod() throws NoSuchMethodException {
+        if (getPhysicalDisplayIdsMethod == null) {
+            getPhysicalDisplayIdsMethod = CLASS.getMethod("getPhysicalDisplayIds");
+        }
+        return getPhysicalDisplayIdsMethod;
+    }
+
+    public static boolean hasGetPhysicalDisplayIdsMethod() {
+        try {
+            getGetPhysicalDisplayIdsMethod();
+            return true;
+        } catch (NoSuchMethodException e) {
+            return false;
+        }
+    }
+
+    public static long[] getPhysicalDisplayIds() {
+        try {
+            Method method = getGetPhysicalDisplayIdsMethod();
+            return (long[]) method.invoke(null);
+        } catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
+    private static Method getSetDisplayPowerModeMethod() throws NoSuchMethodException {
+        if (setDisplayPowerModeMethod == null) {
+            setDisplayPowerModeMethod = CLASS.getMethod("setDisplayPowerMode", IBinder.class, int.class);
+        }
+        return setDisplayPowerModeMethod;
+    }
+
+    public static boolean setDisplayPowerMode(IBinder displayToken, int mode) {
+        try {
+            Method method = getSetDisplayPowerModeMethod();
+            method.invoke(null, displayToken, mode);
+            return true;
+        } catch (ReflectiveOperationException e) {
+            return false;
         }
     }
 }

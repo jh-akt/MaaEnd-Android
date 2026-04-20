@@ -1,6 +1,9 @@
 package com.maaend.android.ui
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
 import android.util.Log
 import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
@@ -8,22 +11,26 @@ import androidx.lifecycle.viewModelScope
 import com.maaend.android.catalog.InterfaceCatalogLoader
 import com.maaend.android.ipc.IRootRuntimeService
 import com.maaend.android.model.CatalogSnapshot
+import com.maaend.android.model.ResourceDescriptor
 import com.maaend.android.model.RunRequest
+import com.maaend.android.model.RuntimeLogChunk
 import com.maaend.android.model.RuntimeStateSnapshot
 import com.maaend.android.model.TaskDescriptor
 import com.maaend.android.model.TaskOptionDescriptor
-import com.maaend.android.model.TaskOptionInput
-import com.maaend.android.model.TaskOptionType
 import com.maaend.android.root.RootManager
 import com.maaend.android.root.RootRuntimeConnector
+import com.maaend.android.runtime.PersistentResourceRepositoryManager
+import com.maaend.android.runtime.PersistentResourceRepositoryStatus
 import com.maaend.android.storage.AppSettings
 import com.maaend.android.storage.AppSettingsRepository
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -34,6 +41,9 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.File
 
 enum class MaaEndTab {
     HOME,
@@ -51,11 +61,17 @@ data class MainUiState(
     val rootConnected: Boolean = false,
     val servicePing: String = "",
     val runtimeState: RuntimeStateSnapshot = RuntimeStateSnapshot(),
+    val selectedResourceId: String? = null,
     val selectedTaskId: String? = null,
     val selectedPresetId: String? = null,
     val checkedTaskIds: Set<String> = emptySet(),
     val taskOptionSelectionsByTask: Map<String, Map<String, Set<String>>> = emptyMap(),
     val taskInputValuesByTask: Map<String, Map<String, Map<String, String>>> = emptyMap(),
+    val sharedOptionSelectionsByScope: Map<String, Map<String, Set<String>>> = emptyMap(),
+    val sharedInputValuesByScope: Map<String, Map<String, Map<String, String>>> = emptyMap(),
+    val resourceRepository: PersistentResourceRepositoryStatus = PersistentResourceRepositoryStatus(),
+    val resourceRepositoryUpdating: Boolean = false,
+    val displayLogs: List<String> = emptyList(),
     val lastMessage: String = "",
     val busy: Boolean = false,
 )
@@ -75,7 +91,22 @@ class MainViewModel(
     private var pollJob: Job? = null
     private var connectJob: Job? = null
     private var previewSurface: Surface? = null
+    private var logCursor: Long = 0L
     private val inputPlaceholderRegex = Regex("\\{([A-Za-z0-9_]+)\\}")
+    private var screenOnReceiverRegistered = false
+    private val screenOnReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            if (intent?.action != Intent.ACTION_SCREEN_ON) {
+                return
+            }
+            if (!_uiState.value.runtimeState.displayPowerOffActive) {
+                return
+            }
+            viewModelScope.launch {
+                restoreDisplayPowerAfterScreenOn()
+            }
+        }
+    }
 
     init {
         val settings = runCatching { settingsRepository.load() }
@@ -83,8 +114,10 @@ class MainViewModel(
                 Log.e(TAG, "Failed to load app settings", error)
                 AppSettings()
             }
+        clearLegacyLogCache(application)
         var lastMessage = "Root 运行环境已就绪"
-        val catalog = runCatching { catalogLoader.load() }
+        val resourceRepository = PersistentResourceRepositoryManager.loadStatus(application)
+        val catalog = runCatching { loadCatalogSnapshot(resourceRepository) }
             .getOrElse { error ->
                 Log.e(TAG, "Failed to load interface catalog", error)
                 lastMessage = "接口资源缺失或格式异常：${error.message ?: error::class.java.simpleName}"
@@ -100,20 +133,34 @@ class MainViewModel(
                 Log.e(TAG, "Failed to detect root grant state", error)
                 false
             }
+        val selectedResourceId = settings.selectedResourceId ?: catalog.resources.firstOrNull()?.id
+        val visibleTasks = visibleTasks(catalog.tasks, selectedResourceId)
+        val selectedTaskId = settings.lastSelectedTaskId
+            ?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
+            ?: visibleTasks.firstOrNull()?.id
         _uiState.value = _uiState.value.copy(
             catalog = catalog,
             settings = settings,
-            selectedTaskId = settings.lastSelectedTaskId ?: catalog.tasks.firstOrNull()?.id,
+            selectedResourceId = selectedResourceId,
+            selectedTaskId = selectedTaskId,
             selectedPresetId = settings.lastSelectedPresetId ?: catalog.presets.firstOrNull()?.id,
             checkedTaskIds = settings.checkedTaskIds.ifEmpty {
-                setOfNotNull(settings.lastSelectedTaskId ?: catalog.tasks.firstOrNull()?.id)
+                setOfNotNull(selectedTaskId)
             }.filterTo(linkedSetOf()) { taskId -> catalog.tasks.any { it.id == taskId } },
             taskOptionSelectionsByTask = mergeStoredOptionSelections(catalog.tasks, settings.taskOptionSelectionsByTask),
             taskInputValuesByTask = mergeStoredInputValues(catalog.tasks, settings.taskInputValuesByTask),
+            sharedOptionSelectionsByScope = mergeStoredOptionSelectionsByScope(catalog, settings.sharedOptionSelectionsByScope),
+            sharedInputValuesByScope = mergeStoredInputValuesByScope(catalog, settings.sharedInputValuesByScope),
+            resourceRepository = resourceRepository,
             rootAvailable = rootAvailable,
             rootGranted = rootGranted,
             lastMessage = lastMessage,
         )
+        if (!resourceRepository.available) {
+            viewModelScope.launch {
+                syncPersistentResourceRepository(force = false, silent = true)
+            }
+        }
         if (rootAvailable) {
             requestRootAndConnectSilently()
         }
@@ -126,6 +173,19 @@ class MainViewModel(
     fun selectTask(taskId: String) {
         settingsRepository.saveLastTaskId(taskId)
         _uiState.value = _uiState.value.copy(selectedTaskId = taskId)
+    }
+
+    fun selectResource(resourceId: String) {
+        settingsRepository.saveSelectedResourceId(resourceId)
+        val visibleTasks = visibleTasks(_uiState.value.catalog.tasks, resourceId)
+        val selectedTaskId = _uiState.value.selectedTaskId
+            ?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
+            ?: visibleTasks.firstOrNull()?.id
+        selectedTaskId?.let(settingsRepository::saveLastTaskId)
+        _uiState.value = _uiState.value.copy(
+            selectedResourceId = resourceId,
+            selectedTaskId = selectedTaskId,
+        )
     }
 
     fun toggleTaskChecked(taskId: String, checked: Boolean) {
@@ -145,6 +205,35 @@ class MainViewModel(
         _uiState.value = _uiState.value.copy(
             settings = _uiState.value.settings.copy(logLevel = logLevel),
         )
+    }
+
+    fun exportConfig(outputStream: OutputStream) {
+        viewModelScope.launch {
+            runCatching { settingsRepository.exportTo(outputStream) }
+                .onSuccess {
+                    _uiState.value = _uiState.value.copy(lastMessage = "配置已导出")
+                }
+                .onFailure { error ->
+                    _uiState.value = _uiState.value.copy(
+                        lastMessage = "导出配置失败：${error.message ?: error::class.java.simpleName}",
+                    )
+                }
+        }
+    }
+
+    fun importConfig(inputStream: InputStream) {
+        viewModelScope.launch {
+            runCatching { settingsRepository.importFrom(inputStream) }
+                .onSuccess { importedSettings ->
+                    applyLoadedSettings(importedSettings)
+                    _uiState.value = _uiState.value.copy(lastMessage = "配置已导入")
+                }
+                .onFailure { error ->
+                    _uiState.value = _uiState.value.copy(
+                        lastMessage = "导入配置失败：${error.message ?: error::class.java.simpleName}",
+                    )
+                }
+        }
     }
 
     fun requestRootAndConnect() {
@@ -172,6 +261,12 @@ class MainViewModel(
         }
     }
 
+    fun refreshResourceRepository() {
+        viewModelScope.launch {
+            syncPersistentResourceRepository(force = true, silent = false)
+        }
+    }
+
     fun startSelectedTask() {
         val tasks = checkedTasksInOrder().ifEmpty {
             selectedTask()?.let(::listOf).orEmpty()
@@ -179,12 +274,18 @@ class MainViewModel(
         if (tasks.isEmpty()) {
             return
         }
-        val overridesByTask = buildOptionOverridesByTask(tasks)
+        val selectedResource = selectedResource()
+        val validationError = validateSelections(tasks, selectedResource)
+        if (validationError != null) {
+            _uiState.value = _uiState.value.copy(lastMessage = validationError)
+            return
+        }
+        val overridesByTask = buildOptionOverridesByTask(tasks, selectedResource)
         val sequenceTaskIds = tasks.map { it.id }
         val request = RunRequest(
             taskId = tasks.first().id,
             sequenceTaskIds = sequenceTaskIds,
-            resourceName = "官服",
+            resourceName = selectedResource?.id ?: "官服",
             logLevel = _uiState.value.settings.logLevel,
             optionOverridesJson = overridesByTask[tasks.first().id],
             optionOverridesByTask = overridesByTask,
@@ -196,6 +297,87 @@ class MainViewModel(
         updateTaskOptionSelections(taskId) { current ->
             current + (optionId to setOf(caseName))
         }
+    }
+
+    private suspend fun syncPersistentResourceRepository(force: Boolean, silent: Boolean) {
+        if (_uiState.value.resourceRepositoryUpdating) {
+            return
+        }
+        _uiState.value = _uiState.value.copy(
+            resourceRepositoryUpdating = true,
+            lastMessage = if (silent) _uiState.value.lastMessage else "正在同步 GitHub 资源仓库",
+        )
+        val application = getApplication<Application>()
+        val status = runCatching {
+            withContext(Dispatchers.IO) {
+                if (force) {
+                    PersistentResourceRepositoryManager.updateFromGithub(application) { message ->
+                        Log.i(TAG, message)
+                    }
+                } else {
+                    PersistentResourceRepositoryManager.ensureAvailable(application) { message ->
+                        Log.i(TAG, message)
+                    }
+                }
+            }
+        }.getOrElse { error ->
+            Log.e(TAG, "Failed to sync GitHub resource repository", error)
+            PersistentResourceRepositoryManager.loadStatus(application).copy(
+                lastError = error.message ?: error::class.java.simpleName,
+            )
+        }
+
+        val nextMessage = when {
+            status.available && force -> "GitHub 资源已更新，下次准备运行时会使用新资源"
+            status.available && !silent -> "GitHub 资源仓库已就绪"
+            status.available -> _uiState.value.lastMessage
+            else -> "GitHub 资源同步失败，继续使用内置资源：${status.lastError ?: "未知错误"}"
+        }
+        refreshCatalogSnapshot(status)
+        _uiState.value = _uiState.value.copy(
+            resourceRepository = status,
+            resourceRepositoryUpdating = false,
+            lastMessage = nextMessage,
+        )
+    }
+
+    private fun loadCatalogSnapshot(resourceRepository: PersistentResourceRepositoryStatus): CatalogSnapshot {
+        val application = getApplication<Application>()
+        return if (resourceRepository.available) {
+            catalogLoader.loadFromDirectory(PersistentResourceRepositoryManager.currentRoot(application))
+        } else {
+            catalogLoader.load()
+        }
+    }
+
+    private fun refreshCatalogSnapshot(resourceRepository: PersistentResourceRepositoryStatus) {
+        val catalog = runCatching { loadCatalogSnapshot(resourceRepository) }
+            .getOrElse { error ->
+                Log.e(TAG, "Failed to reload catalog from current resource source", error)
+                return
+            }
+        val settings = _uiState.value.settings
+        val selectedResourceId = _uiState.value.selectedResourceId
+            ?.takeIf { id -> catalog.resources.any { it.id == id } }
+            ?: settings.selectedResourceId?.takeIf { id -> catalog.resources.any { it.id == id } }
+            ?: catalog.resources.firstOrNull()?.id
+        val visibleTasks = visibleTasks(catalog.tasks, selectedResourceId)
+        val selectedTaskId = _uiState.value.selectedTaskId
+            ?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
+            ?: settings.lastSelectedTaskId?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
+            ?: visibleTasks.firstOrNull()?.id
+        _uiState.value = _uiState.value.copy(
+            catalog = catalog,
+            selectedResourceId = selectedResourceId,
+            selectedTaskId = selectedTaskId,
+            checkedTaskIds = _uiState.value.checkedTaskIds.filterTo(linkedSetOf()) { taskId ->
+                catalog.tasks.any { it.id == taskId }
+            },
+            taskOptionSelectionsByTask = mergeStoredOptionSelections(catalog.tasks, _uiState.value.taskOptionSelectionsByTask),
+            taskInputValuesByTask = mergeStoredInputValues(catalog.tasks, _uiState.value.taskInputValuesByTask),
+            sharedOptionSelectionsByScope = mergeStoredOptionSelectionsByScope(catalog, _uiState.value.sharedOptionSelectionsByScope),
+            sharedInputValuesByScope = mergeStoredInputValuesByScope(catalog, _uiState.value.sharedInputValuesByScope),
+        )
     }
 
     fun toggleTaskCheckboxOption(taskId: String, optionId: String, caseName: String) {
@@ -221,10 +403,55 @@ class MainViewModel(
         )
     }
 
+    fun updateSharedSwitchOption(scopeId: String, optionId: String, caseName: String) {
+        updateSharedOptionSelections(scopeId) { current ->
+            current + (optionId to setOf(caseName))
+        }
+    }
+
+    fun toggleSharedCheckboxOption(scopeId: String, optionId: String, caseName: String) {
+        updateSharedOptionSelections(scopeId) { current ->
+            val existing = current[optionId].orEmpty()
+            val updated = existing.toMutableSet().apply {
+                if (!add(caseName)) {
+                    remove(caseName)
+                }
+            }
+            current + (optionId to updated)
+        }
+    }
+
+    fun updateSharedInputValue(scopeId: String, optionId: String, inputName: String, value: String) {
+        val currentScopeInputs = _uiState.value.sharedInputValuesByScope[scopeId].orEmpty()
+        val currentOptionInputs = currentScopeInputs[optionId].orEmpty()
+        val updatedScopeInputs = currentScopeInputs + (optionId to (currentOptionInputs + (inputName to value)))
+        val updatedAllInputs = _uiState.value.sharedInputValuesByScope + (scopeId to updatedScopeInputs)
+        settingsRepository.saveSharedInputValuesByScope(updatedAllInputs)
+        _uiState.value = _uiState.value.copy(
+            sharedInputValuesByScope = updatedAllInputs,
+        )
+    }
+
     fun stopRun() {
         viewModelScope.launch {
             runCatching { service?.stopRun() }
             refreshRuntimeState()
+        }
+    }
+
+    fun toggleDisplayPower() {
+        viewModelScope.launch {
+            val runtimeService = requireRuntimeService() ?: return@launch
+            val turnOn = _uiState.value.runtimeState.displayPowerOffActive
+            val changed = runCatching { runtimeService.setDisplayPower(turnOn) }.getOrDefault(false)
+            refreshRuntimeState()
+            _uiState.value = _uiState.value.copy(
+                lastMessage = when {
+                    !changed -> "息屏挂机切换失败"
+                    turnOn -> "已恢复亮屏"
+                    else -> "已进入息屏挂机，按电源键可唤醒"
+                },
+            )
         }
     }
 
@@ -301,11 +528,30 @@ class MainViewModel(
     private suspend fun refreshRuntimeState() {
         val runtimeService = service ?: return
         runCatching {
-            val state = json.decodeFromString<RuntimeStateSnapshot>(runtimeService.getState())
+            val polled = withContext(Dispatchers.IO) {
+                val state = json.decodeFromString<RuntimeStateSnapshot>(runtimeService.getState())
+                val logChunk = json.decodeFromString<RuntimeLogChunk>(
+                    runtimeService.readLogChunk(logCursor, LOG_CHUNK_LINES),
+                )
+                state to logChunk
+            }
+            val (state, logChunk) = polled
+            val displayLogs = mergeDisplayLogs(logChunk)
             _uiState.value = _uiState.value.copy(
                 runtimeState = state,
                 servicePing = runtimeService.ping(),
+                displayLogs = displayLogs,
             )
+            syncScreenOnReceiver(state.displayPowerOffActive)
+        }
+    }
+
+    private suspend fun restoreDisplayPowerAfterScreenOn() {
+        val runtimeService = service ?: return
+        val restored = runCatching { runtimeService.setDisplayPower(true) }.getOrDefault(false)
+        refreshRuntimeState()
+        if (restored) {
+            _uiState.value = _uiState.value.copy(lastMessage = "检测到亮屏，已退出息屏挂机")
         }
     }
 
@@ -413,6 +659,7 @@ class MainViewModel(
 
         rootConnector.disconnect(existingService)
         service = null
+        syncScreenOnReceiver(false)
         _uiState.value = _uiState.value.copy(
             rootConnected = false,
             servicePing = "",
@@ -421,37 +668,122 @@ class MainViewModel(
     }
 
     private fun selectedTask(): TaskDescriptor? {
-        return _uiState.value.catalog.tasks.firstOrNull { it.id == _uiState.value.selectedTaskId }
+        return visibleTasks(
+            _uiState.value.catalog.tasks,
+            _uiState.value.selectedResourceId,
+        ).firstOrNull { it.id == _uiState.value.selectedTaskId }
     }
 
     private fun checkedTasksInOrder(): List<TaskDescriptor> {
         val checked = _uiState.value.checkedTaskIds
-        return _uiState.value.catalog.tasks.filter { it.id in checked }
+        return visibleTasks(
+            _uiState.value.catalog.tasks,
+            _uiState.value.selectedResourceId,
+        ).filter { it.id in checked }
+    }
+
+    private fun selectedResource(): ResourceDescriptor? {
+        val selectedId = _uiState.value.selectedResourceId
+        return _uiState.value.catalog.resources.firstOrNull { it.id == selectedId }
+            ?: _uiState.value.catalog.resources.firstOrNull()
+    }
+
+    private fun visibleTasks(
+        tasks: List<TaskDescriptor>,
+        resourceId: String?,
+    ): List<TaskDescriptor> {
+        return tasks.filter { task ->
+            ProjectInterfaceSupport.taskSupportsResource(task, resourceId)
+        }
     }
 
     private fun setBusy(busy: Boolean, message: String) {
         _uiState.value = _uiState.value.copy(busy = busy, lastMessage = message)
     }
 
+    private fun applyLoadedSettings(settings: AppSettings) {
+        val catalog = _uiState.value.catalog
+        val selectedResourceId = settings.selectedResourceId ?: catalog.resources.firstOrNull()?.id
+        val visibleTasks = visibleTasks(catalog.tasks, selectedResourceId)
+        val selectedTaskId = settings.lastSelectedTaskId
+            ?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
+            ?: visibleTasks.firstOrNull()?.id
+
+        _uiState.value = _uiState.value.copy(
+            settings = settings,
+            selectedResourceId = selectedResourceId,
+            selectedTaskId = selectedTaskId,
+            selectedPresetId = settings.lastSelectedPresetId ?: catalog.presets.firstOrNull()?.id,
+            checkedTaskIds = settings.checkedTaskIds.ifEmpty {
+                setOfNotNull(selectedTaskId)
+            }.filterTo(linkedSetOf()) { taskId -> catalog.tasks.any { it.id == taskId } },
+            taskOptionSelectionsByTask = mergeStoredOptionSelections(catalog.tasks, settings.taskOptionSelectionsByTask),
+            taskInputValuesByTask = mergeStoredInputValues(catalog.tasks, settings.taskInputValuesByTask),
+            sharedOptionSelectionsByScope = mergeStoredOptionSelectionsByScope(catalog, settings.sharedOptionSelectionsByScope),
+            sharedInputValuesByScope = mergeStoredInputValuesByScope(catalog, settings.sharedInputValuesByScope),
+        )
+    }
+
     override fun onCleared() {
         super.onCleared()
         pollJob?.cancel()
+        syncScreenOnReceiver(false)
+        runCatching { service?.setDisplayPower(true) }
         runCatching { service?.stopWindowedPreview() }
         previewSurface = null
         rootConnector.disconnect(service)
         service = null
     }
 
+    private fun syncScreenOnReceiver(active: Boolean) {
+        val application = getApplication<Application>()
+        if (active && !screenOnReceiverRegistered) {
+            application.registerReceiver(screenOnReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
+            screenOnReceiverRegistered = true
+        } else if (!active && screenOnReceiverRegistered) {
+            runCatching { application.unregisterReceiver(screenOnReceiver) }
+            screenOnReceiverRegistered = false
+        }
+    }
+
     private companion object {
         const val TAG = "MainViewModel"
+        const val LOG_CHUNK_LINES = 512
+        const val MAX_IN_MEMORY_LOG_LINES = 10_000
+    }
+
+    private fun mergeDisplayLogs(chunk: RuntimeLogChunk): List<String> {
+        val base = if (chunk.reset) emptyList() else _uiState.value.displayLogs
+        val merged = if (chunk.lines.isEmpty()) {
+            base
+        } else {
+            (base + chunk.lines).takeLast(MAX_IN_MEMORY_LOG_LINES)
+        }
+        logCursor = chunk.nextOffsetBytes
+        return merged
+    }
+
+    private fun clearLegacyLogCache(application: Application) {
+        val logCacheFile = File(application.filesDir, "runtime-log-cache.json")
+        runCatching {
+            if (logCacheFile.exists() && !logCacheFile.delete()) {
+                Log.w(TAG, "Failed to delete legacy log cache file: $logCacheFile")
+            }
+        }.onFailure { error ->
+            Log.w(TAG, "Failed to clear legacy log cache", error)
+        }
     }
 
     private fun buildDefaultOptionSelections(tasks: List<TaskDescriptor>): Map<String, Map<String, Set<String>>> {
         return tasks.mapNotNull { task ->
-            val defaults = mutableMapOf<String, Set<String>>()
-            collectDefaultSelections(task.options, defaults)
-            defaults.takeIf { it.isNotEmpty() }?.let { task.id to it }
+            buildDefaultSelectionsForOptions(task.options).takeIf { it.isNotEmpty() }?.let { task.id to it }
         }.toMap()
+    }
+
+    private fun buildDefaultSelectionsForOptions(options: List<TaskOptionDescriptor>): Map<String, Set<String>> {
+        val defaults = mutableMapOf<String, Set<String>>()
+        collectDefaultSelections(options, defaults)
+        return defaults
     }
 
     private fun collectDefaultSelections(
@@ -459,7 +791,7 @@ class MainViewModel(
         into: MutableMap<String, Set<String>>,
     ) {
         options.forEach { option ->
-            val defaults = defaultSelectionForOption(option)
+            val defaults = ProjectInterfaceSupport.defaultSelectionForOption(option)
             if (defaults.isNotEmpty()) {
                 into[option.id] = defaults
             }
@@ -473,10 +805,14 @@ class MainViewModel(
 
     private fun buildDefaultInputValues(tasks: List<TaskDescriptor>): Map<String, Map<String, Map<String, String>>> {
         return tasks.mapNotNull { task ->
-            val defaults = mutableMapOf<String, Map<String, String>>()
-            collectDefaultInputs(task.options, defaults)
-            defaults.takeIf { it.isNotEmpty() }?.let { task.id to it }
+            buildDefaultInputValuesForOptions(task.options).takeIf { it.isNotEmpty() }?.let { task.id to it }
         }.toMap()
+    }
+
+    private fun buildDefaultInputValuesForOptions(options: List<TaskOptionDescriptor>): Map<String, Map<String, String>> {
+        val defaults = mutableMapOf<String, Map<String, String>>()
+        collectDefaultInputs(options, defaults)
+        return defaults
     }
 
     private fun mergeStoredOptionSelections(
@@ -485,12 +821,28 @@ class MainViewModel(
     ): Map<String, Map<String, Set<String>>> {
         val defaults = buildDefaultOptionSelections(tasks).toMutableMap()
         tasks.forEach { task ->
-            val storedTaskSelections = stored[task.id].orEmpty()
-            if (storedTaskSelections.isNotEmpty()) {
+            stored[task.id]?.takeIf { it.isNotEmpty() }?.let { storedTaskSelections ->
                 defaults[task.id] = defaults[task.id].orEmpty() + storedTaskSelections
             }
         }
         return defaults
+    }
+
+    private fun mergeStoredOptionSelectionsByScope(
+        catalog: CatalogSnapshot,
+        stored: Map<String, Map<String, Set<String>>>,
+    ): Map<String, Map<String, Set<String>>> {
+        val scopes = buildSharedOptionScopes(catalog)
+        val merged = linkedMapOf<String, Map<String, Set<String>>>()
+        scopes.forEach { (scopeId, options) ->
+            val defaults = buildDefaultSelectionsForOptions(options)
+            val storedSelections = stored[scopeId].orEmpty()
+            val combined = defaults + storedSelections
+            if (combined.isNotEmpty()) {
+                merged[scopeId] = combined
+            }
+        }
+        return merged
     }
 
     private fun mergeStoredInputValues(
@@ -511,6 +863,27 @@ class MainViewModel(
         return defaults
     }
 
+    private fun mergeStoredInputValuesByScope(
+        catalog: CatalogSnapshot,
+        stored: Map<String, Map<String, Map<String, String>>>,
+    ): Map<String, Map<String, Map<String, String>>> {
+        val scopes = buildSharedOptionScopes(catalog)
+        val merged = linkedMapOf<String, Map<String, Map<String, String>>>()
+        scopes.forEach { (scopeId, options) ->
+            val defaults = buildDefaultInputValuesForOptions(options).toMutableMap()
+            val storedScopeInputs = stored[scopeId].orEmpty()
+            if (storedScopeInputs.isNotEmpty()) {
+                storedScopeInputs.forEach { (optionId, inputValues) ->
+                    defaults[optionId] = defaults[optionId].orEmpty() + inputValues
+                }
+            }
+            if (defaults.isNotEmpty()) {
+                merged[scopeId] = defaults
+            }
+        }
+        return merged
+    }
+
     private fun collectDefaultInputs(
         options: List<TaskOptionDescriptor>,
         into: MutableMap<String, Map<String, String>>,
@@ -519,7 +892,7 @@ class MainViewModel(
             if (option.inputs.isNotEmpty()) {
                 into[option.id] = option.inputs.associate { it.name to it.defaultValue }
             }
-            val defaults = defaultSelectionForOption(option)
+            val defaults = ProjectInterfaceSupport.defaultSelectionForOption(option)
             option.cases
                 .filter { it.name in defaults }
                 .forEach { case ->
@@ -528,52 +901,91 @@ class MainViewModel(
         }
     }
 
-    private fun defaultSelectionForOption(option: TaskOptionDescriptor): Set<String> {
-        val defaults = option.defaultCaseNames.toSet()
-        if (defaults.isNotEmpty()) {
-            return defaults
-        }
-        return when (option.type) {
-            TaskOptionType.Switch,
-            TaskOptionType.Select -> option.cases.firstOrNull()?.name?.let(::setOf).orEmpty()
-            TaskOptionType.Checkbox,
-            TaskOptionType.Input -> emptySet()
-        }
-    }
-
     private fun updateTaskOptionSelections(
         taskId: String,
         transform: (Map<String, Set<String>>) -> Map<String, Set<String>>,
     ) {
+        val task = _uiState.value.catalog.tasks.firstOrNull { it.id == taskId }
         val current = _uiState.value.taskOptionSelectionsByTask[taskId]
-            ?: buildDefaultOptionSelections(_uiState.value.catalog.tasks.filter { it.id == taskId })[taskId]
+            ?: task?.let { buildDefaultSelectionsForOptions(it.options) }
             ?: emptyMap()
         val updated = transform(current).filterValues { it.isNotEmpty() }
         val updatedAllSelections = _uiState.value.taskOptionSelectionsByTask + (taskId to updated)
         settingsRepository.saveTaskOptionSelectionsByTask(updatedAllSelections)
-        _uiState.value = _uiState.value.copy(
-            taskOptionSelectionsByTask = updatedAllSelections,
-        )
+        _uiState.value = _uiState.value.copy(taskOptionSelectionsByTask = updatedAllSelections)
     }
 
-    private fun buildOptionOverridesByTask(tasks: List<TaskDescriptor>): Map<String, String> {
+    private fun updateSharedOptionSelections(
+        scopeId: String,
+        transform: (Map<String, Set<String>>) -> Map<String, Set<String>>,
+    ) {
+        val options = buildSharedOptionScopes(_uiState.value.catalog)[scopeId].orEmpty()
+        val current = _uiState.value.sharedOptionSelectionsByScope[scopeId]
+            ?: buildDefaultSelectionsForOptions(options)
+        val updated = transform(current).filterValues { it.isNotEmpty() }
+        val updatedAllSelections = _uiState.value.sharedOptionSelectionsByScope + (scopeId to updated)
+        settingsRepository.saveSharedOptionSelectionsByScope(updatedAllSelections)
+        _uiState.value = _uiState.value.copy(sharedOptionSelectionsByScope = updatedAllSelections)
+    }
+
+    private fun buildOptionOverridesByTask(
+        tasks: List<TaskDescriptor>,
+        resource: ResourceDescriptor?,
+    ): Map<String, String> {
+        val sharedOverride = buildSharedOptionOverride(resource)
         return tasks.mapNotNull { task ->
-            buildTaskOptionOverride(task)?.let { task.id to it }
+            mergeOverrideJson(
+                sharedOverride,
+                buildTaskOptionOverride(task, resource?.id),
+            )?.let { task.id to it }
         }.toMap()
     }
 
-    private fun buildTaskOptionOverride(task: TaskDescriptor): String? {
-        if (task.options.isEmpty()) {
+    private fun buildSharedOptionOverride(resource: ResourceDescriptor?): String? {
+        val resourceId = resource?.id
+        val globalOverride = buildOptionOverride(
+            options = ProjectInterfaceSupport.filterOptionsForResource(
+                _uiState.value.catalog.globalOptions,
+                resourceId,
+            ),
+            selectedByOption = _uiState.value.sharedOptionSelectionsByScope[ProjectInterfaceSupport.GLOBAL_SCOPE_ID].orEmpty(),
+            inputValuesByOption = _uiState.value.sharedInputValuesByScope[ProjectInterfaceSupport.GLOBAL_SCOPE_ID].orEmpty(),
+        )
+        val resourceScopeId = resource?.id?.let(ProjectInterfaceSupport::resourceScopeId)
+        val resourceOverride = buildOptionOverride(
+            options = resource?.let {
+                ProjectInterfaceSupport.filterOptionsForResource(it.options, resourceId)
+            }.orEmpty(),
+            selectedByOption = resourceScopeId?.let { _uiState.value.sharedOptionSelectionsByScope[it].orEmpty() }.orEmpty(),
+            inputValuesByOption = resourceScopeId?.let { _uiState.value.sharedInputValuesByScope[it].orEmpty() }.orEmpty(),
+        )
+        return mergeOverrideJson(globalOverride, resourceOverride)
+    }
+
+    private fun buildTaskOptionOverride(
+        task: TaskDescriptor,
+        resourceId: String?,
+    ): String? {
+        return buildOptionOverride(
+            options = ProjectInterfaceSupport.filterOptionsForResource(task.options, resourceId),
+            selectedByOption = _uiState.value.taskOptionSelectionsByTask[task.id].orEmpty(),
+            inputValuesByOption = _uiState.value.taskInputValuesByTask[task.id].orEmpty(),
+        )
+    }
+
+    private fun buildOptionOverride(
+        options: List<TaskOptionDescriptor>,
+        selectedByOption: Map<String, Set<String>>,
+        inputValuesByOption: Map<String, Map<String, String>>,
+    ): String? {
+        if (options.isEmpty()) {
             return null
         }
 
         var merged = JsonObject(emptyMap())
         var hasOverride = false
-        val selectedByOption = _uiState.value.taskOptionSelectionsByTask[task.id].orEmpty()
-        val inputValuesByOption = _uiState.value.taskInputValuesByTask[task.id].orEmpty()
-
         applyOptionOverrides(
-            options = task.options,
+            options = options,
             selectedByOption = selectedByOption,
             inputValuesByOption = inputValuesByOption,
             onMerge = { overrideJson ->
@@ -584,7 +996,6 @@ class MainViewModel(
                 hasOverride = true
             },
         )
-
         return if (hasOverride) merged.toString() else null
     }
 
@@ -596,11 +1007,11 @@ class MainViewModel(
     ) {
         options.forEach { option ->
             when (option.type) {
-                TaskOptionType.Switch,
-                TaskOptionType.Select,
-                TaskOptionType.Checkbox -> {
+                com.maaend.android.model.TaskOptionType.Switch,
+                com.maaend.android.model.TaskOptionType.Select,
+                com.maaend.android.model.TaskOptionType.Checkbox -> {
                     val selectedCaseNames = selectedByOption[option.id].takeUnless { it.isNullOrEmpty() }
-                        ?: defaultSelectionForOption(option)
+                        ?: ProjectInterfaceSupport.defaultSelectionForOption(option)
                     option.cases
                         .filter { it.name in selectedCaseNames }
                         .forEach { optionCase ->
@@ -614,12 +1025,62 @@ class MainViewModel(
                         }
                 }
 
-                TaskOptionType.Input -> {
+                com.maaend.android.model.TaskOptionType.Input -> {
                     val values = buildInputValues(option, inputValuesByOption[option.id].orEmpty())
                     onMerge(applyInputPlaceholders(option.pipelineOverrideJson, values))
                 }
             }
         }
+    }
+
+    private fun validateSelections(
+        tasks: List<TaskDescriptor>,
+        resource: ResourceDescriptor?,
+    ): String? {
+        val resourceId = resource?.id
+        val globalErrors = ProjectInterfaceSupport.collectInputValidationErrors(
+            options = ProjectInterfaceSupport.filterOptionsForResource(_uiState.value.catalog.globalOptions, resourceId),
+            selectedByOption = _uiState.value.sharedOptionSelectionsByScope[ProjectInterfaceSupport.GLOBAL_SCOPE_ID].orEmpty(),
+            inputValuesByOption = _uiState.value.sharedInputValuesByScope[ProjectInterfaceSupport.GLOBAL_SCOPE_ID].orEmpty(),
+        )
+        if (globalErrors.isNotEmpty()) {
+            return "全局配置里有未通过校验的输入项"
+        }
+        val resourceScopeId = resource?.id?.let(ProjectInterfaceSupport::resourceScopeId)
+        val resourceErrors = ProjectInterfaceSupport.collectInputValidationErrors(
+            options = resource?.let {
+                ProjectInterfaceSupport.filterOptionsForResource(it.options, resourceId)
+            }.orEmpty(),
+            selectedByOption = resourceScopeId?.let { _uiState.value.sharedOptionSelectionsByScope[it].orEmpty() }.orEmpty(),
+            inputValuesByOption = resourceScopeId?.let { _uiState.value.sharedInputValuesByScope[it].orEmpty() }.orEmpty(),
+        )
+        if (resourceErrors.isNotEmpty()) {
+            return "资源包配置里有未通过校验的输入项"
+        }
+        tasks.forEach { task ->
+            val taskErrors = ProjectInterfaceSupport.collectInputValidationErrors(
+                options = ProjectInterfaceSupport.filterOptionsForResource(task.options, resourceId),
+                selectedByOption = _uiState.value.taskOptionSelectionsByTask[task.id].orEmpty(),
+                inputValuesByOption = _uiState.value.taskInputValuesByTask[task.id].orEmpty(),
+            )
+            if (taskErrors.isNotEmpty()) {
+                return "任务「${task.label}」里有未通过校验的输入项"
+            }
+        }
+        return null
+    }
+
+    private fun buildSharedOptionScopes(catalog: CatalogSnapshot): Map<String, List<TaskOptionDescriptor>> {
+        val scopes = linkedMapOf<String, List<TaskOptionDescriptor>>()
+        if (catalog.globalOptions.isNotEmpty()) {
+            scopes[ProjectInterfaceSupport.GLOBAL_SCOPE_ID] = catalog.globalOptions
+        }
+        catalog.resources.forEach { resource ->
+            if (resource.options.isNotEmpty()) {
+                scopes[ProjectInterfaceSupport.resourceScopeId(resource.id)] = resource.options
+            }
+        }
+        return scopes
     }
 
     private fun buildInputValues(
@@ -660,6 +1121,24 @@ class MainViewModel(
                 }
             }
         }
+    }
+
+    private fun mergeOverrideJson(baseJson: String?, overlayJson: String?): String? {
+        val base = parseOverrideObject(baseJson)
+        val overlay = parseOverrideObject(overlayJson)
+        return when {
+            base == null && overlay == null -> null
+            base == null -> overlay?.toString()
+            overlay == null -> base.toString()
+            else -> mergeJsonObjects(base, overlay).toString()
+        }
+    }
+
+    private fun parseOverrideObject(rawJson: String?): JsonObject? {
+        if (rawJson.isNullOrBlank()) {
+            return null
+        }
+        return runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull()
     }
 
     private fun replacePlaceholders(

@@ -10,6 +10,7 @@ import com.maaend.android.model.TaskOptionInput
 import com.maaend.android.model.TaskOptionType
 import com.maaend.android.model.TaskDescriptor
 import com.maaend.android.model.TaskTier
+import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -40,6 +41,18 @@ class InterfaceCatalogLoader(
         )
     }
 
+    fun loadFromDirectory(rootDir: File): CatalogSnapshot {
+        val interfaceText = File(rootDir, "interface.json").readText()
+        val localeText = File(rootDir, "locales/interface/zh_cn.json").readText()
+        return parseCatalog(
+            interfaceText = interfaceText,
+            localeText = localeText,
+            importResolver = { path ->
+                File(rootDir, path.removePrefix("./")).readText()
+            },
+        )
+    }
+
     internal fun parseCatalog(
         interfaceText: String,
         localeText: String,
@@ -49,23 +62,36 @@ class InterfaceCatalogLoader(
         val root = parseJsonObject(interfaceText)
         val importPaths = stringArray(root["import"])
 
-        val taskObjects = mutableListOf<Pair<JsonObject, JsonObject>>()
+        val optionEntries = linkedMapOf<String, JsonElement>()
+        optionEntries.putAll((root["option"] as? JsonObject).orEmpty())
+
+        val taskObjects = mutableListOf<JsonObject>()
         val presetObjects = mutableListOf<JsonObject>()
+        taskObjects += root["task"].asObjects()
+        presetObjects += root["preset"].asObjects()
 
         for (importPath in importPaths) {
             val importedRoot = parseJsonObject(importResolver(importPath))
-            val optionRoot = importedRoot["option"] as? JsonObject ?: JsonObject(emptyMap())
-            taskObjects += importedRoot["task"].asObjects().map { it to optionRoot }
+            optionEntries.putAll((importedRoot["option"] as? JsonObject).orEmpty())
+            taskObjects += importedRoot["task"].asObjects()
             presetObjects += importedRoot["preset"].asObjects()
         }
 
-        val resources = root["resource"].asObjects().mapNotNull { parseResource(it, localeMap) }
+        val optionRoot = JsonObject(optionEntries)
+        val resources = root["resource"].asObjects().mapNotNull { parseResource(it, localeMap, optionRoot) }
+        val globalOptions = parseTaskOptions(
+            optionIds = stringArray(root["global_option"]),
+            localeMap = localeMap,
+            optionRoot = optionRoot,
+            seen = linkedSetOf(),
+        )
 
         val tasks = taskObjects
-            .mapNotNull { (taskObj, optionRoot) -> parseTask(taskObj, localeMap, optionRoot) }
+            .mapNotNull { taskObj -> parseTask(taskObj, localeMap, optionRoot) }
             .sortedWith(
                 compareBy<TaskDescriptor>(
-                    { MVP_TASK_ORDER.indexOf(it.id).takeIf { index -> index >= 0 } ?: Int.MAX_VALUE },
+                    { taskGroupRank(it.id) },
+                    { taskOrderInGroup(it.id) },
                     { it.label },
                 ),
             )
@@ -78,6 +104,7 @@ class InterfaceCatalogLoader(
             tasks = tasks,
             presets = presets,
             resources = resources,
+            globalOptions = globalOptions,
         )
     }
 
@@ -104,9 +131,11 @@ class InterfaceCatalogLoader(
             id = id,
             label = resolveText(obj["label"].primitiveContent(), localeMap, fallback = id),
             description = resolveText(obj["description"].primitiveContent(), localeMap, fallback = ""),
+            iconPath = resolveText(obj["icon"].primitiveContent(), localeMap, fallback = ""),
             entry = obj["entry"].primitiveContent() ?: "",
             groups = stringArray(obj["group"]),
             controllers = controllers,
+            supportedResources = stringArray(obj["resource"]),
             tier = tier,
             options = parseTaskOptions(
                 optionIds = stringArray(obj["option"]),
@@ -142,11 +171,22 @@ class InterfaceCatalogLoader(
     private fun parseResource(
         obj: JsonObject,
         localeMap: Map<String, String>,
+        optionRoot: JsonObject,
     ): ResourceDescriptor? {
         val id = obj["name"].primitiveContent() ?: return null
         return ResourceDescriptor(
             id = id,
             label = resolveText(obj["label"].primitiveContent(), localeMap, fallback = id),
+            description = resolveText(obj["description"].primitiveContent(), localeMap, fallback = ""),
+            iconPath = resolveText(obj["icon"].primitiveContent(), localeMap, fallback = ""),
+            paths = stringArray(obj["path"]),
+            controllers = stringArray(obj["controller"]),
+            options = parseTaskOptions(
+                optionIds = stringArray(obj["option"]),
+                localeMap = localeMap,
+                optionRoot = optionRoot,
+                seen = linkedSetOf(),
+            ),
         )
     }
 
@@ -207,6 +247,8 @@ class InterfaceCatalogLoader(
             TaskOptionCase(
                 name = caseName,
                 label = resolveOptionCaseLabel(optionId, caseObj, caseName, localeMap),
+                description = resolveText(caseObj["description"].primitiveContent(), localeMap, fallback = ""),
+                iconPath = resolveText(caseObj["icon"].primitiveContent(), localeMap, fallback = ""),
                 pipelineOverrideJson = pipelineOverride.toString(),
                 nestedOptions = parseTaskOptions(
                     optionIds = nestedOptionIds,
@@ -225,6 +267,7 @@ class InterfaceCatalogLoader(
                 description = resolveText(inputObj["description"].primitiveContent(), localeMap, fallback = ""),
                 defaultValue = inputObj["default"].primitiveContent().orEmpty(),
                 verifyRegex = inputObj["verify"].primitiveContent().orEmpty(),
+                patternMessage = resolveText(inputObj["pattern_msg"].primitiveContent(), localeMap, fallback = ""),
                 pipelineType = inputObj["pipeline_type"].primitiveContent().orEmpty(),
             )
         }
@@ -236,6 +279,8 @@ class InterfaceCatalogLoader(
             type = type,
             label = resolveText(obj["label"].primitiveContent(), localeMap, fallback = optionId),
             description = resolveText(obj["description"].primitiveContent(), localeMap, fallback = ""),
+            iconPath = resolveText(obj["icon"].primitiveContent(), localeMap, fallback = ""),
+            supportedResources = stringArray(obj["resource"]),
             defaultCaseNames = defaultCaseNames,
             cases = cases,
             inputs = inputs,
@@ -271,6 +316,7 @@ class InterfaceCatalogLoader(
         return when {
             MVP_TASK_ORDER.contains(id) -> TaskTier.MVP
             STRETCH_TASKS.contains(id) -> TaskTier.STRETCH
+            PARTIAL_SUPPORT_TASK_ORDER.contains(id) -> TaskTier.STRETCH
             else -> null
         }
     }
@@ -316,6 +362,10 @@ class InterfaceCatalogLoader(
         return (this as? JsonPrimitive)?.contentOrNull
     }
 
+    private fun JsonObject?.orEmpty(): Map<String, JsonElement> {
+        return this ?: emptyMap()
+    }
+
     private fun <K, V> Map<K, V>.mapValuesNotNull(transform: (Map.Entry<K, V>) -> String?): Map<K, String> {
         val result = linkedMapOf<K, String>()
         for (entry in entries) {
@@ -331,22 +381,52 @@ class InterfaceCatalogLoader(
             return listOf("AndroidOpenGame") + filtered
         }
 
+        private fun taskGroupRank(id: String): Int {
+            return when {
+                MVP_TASK_ORDER.contains(id) -> 0
+                STRETCH_TASKS.contains(id) -> 1
+                PARTIAL_SUPPORT_TASK_ORDER.contains(id) -> 2
+                else -> Int.MAX_VALUE
+            }
+        }
+
+        private fun taskOrderInGroup(id: String): Int {
+            return when {
+                MVP_TASK_ORDER.contains(id) -> MVP_TASK_ORDER.indexOf(id)
+                STRETCH_TASKS.contains(id) -> STRETCH_TASK_ORDER.indexOf(id).takeIf { it >= 0 } ?: Int.MAX_VALUE
+                PARTIAL_SUPPORT_TASK_ORDER.contains(id) -> PARTIAL_SUPPORT_TASK_ORDER.indexOf(id)
+                else -> Int.MAX_VALUE
+            }
+        }
+
         val MVP_TASK_ORDER = listOf(
             "AndroidOpenGame",
             "DijiangRewards",
             "CreditShoppingN2",
             "VisitFriends",
             "SellProduct",
-            "AutoEssence",
+        )
+
+        val STRETCH_TASK_ORDER = listOf(
+            "DeliveryJobs",
             "DailyRewards",
         )
 
-        val STRETCH_TASKS = setOf(
-            "SeizeEntrustTask",
-            "DeliveryJobs",
+        val STRETCH_TASKS = STRETCH_TASK_ORDER.toSet()
+
+        val PARTIAL_SUPPORT_TASK_ORDER = listOf(
             "GearAssembly",
-            "BakerEntry",
+            "AutoEssence",
             "EnvironmentMonitoring",
+            "Crafting",
+            "WeaponUpgrade",
+            "AutoUseSpMedication",
+            "SimpleProductionBatchStart",
+            "ReceiveProdManual",
+            "BakerEntry",
+            "ReadAllWiki",
         )
+
+        val PARTIAL_SUPPORT_TASK_IDS = PARTIAL_SUPPORT_TASK_ORDER.toSet()
     }
 }

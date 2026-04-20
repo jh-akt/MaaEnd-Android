@@ -23,6 +23,7 @@ data class TaskOptionInput(
     val description: String = "",
     val defaultValue: String = "",
     val verifyRegex: String = "",
+    val patternMessage: String = "",
     val pipelineType: String = "",
 )
 
@@ -30,6 +31,8 @@ data class TaskOptionInput(
 data class TaskOptionCase(
     val name: String,
     val label: String,
+    val description: String = "",
+    val iconPath: String = "",
     val pipelineOverrideJson: String,
     val nestedOptions: List<TaskOptionDescriptor> = emptyList(),
 )
@@ -40,6 +43,8 @@ data class TaskOptionDescriptor(
     val type: TaskOptionType,
     val label: String,
     val description: String = "",
+    val iconPath: String = "",
+    val supportedResources: List<String> = emptyList(),
     val defaultCaseNames: List<String> = emptyList(),
     val cases: List<TaskOptionCase> = emptyList(),
     val inputs: List<TaskOptionInput> = emptyList(),
@@ -51,9 +56,11 @@ data class TaskDescriptor(
     val id: String,
     val label: String,
     val description: String,
+    val iconPath: String = "",
     val entry: String,
     val groups: List<String>,
     val controllers: List<String>,
+    val supportedResources: List<String> = emptyList(),
     val tier: TaskTier,
     val options: List<TaskOptionDescriptor> = emptyList(),
 )
@@ -71,6 +78,11 @@ data class PresetDescriptor(
 data class ResourceDescriptor(
     val id: String,
     val label: String,
+    val description: String = "",
+    val iconPath: String = "",
+    val paths: List<String> = emptyList(),
+    val controllers: List<String> = emptyList(),
+    val options: List<TaskOptionDescriptor> = emptyList(),
 )
 
 @Serializable
@@ -78,6 +90,7 @@ data class CatalogSnapshot(
     val tasks: List<TaskDescriptor> = emptyList(),
     val presets: List<PresetDescriptor> = emptyList(),
     val resources: List<ResourceDescriptor> = emptyList(),
+    val globalOptions: List<TaskOptionDescriptor> = emptyList(),
 )
 
 @Serializable
@@ -121,6 +134,7 @@ data class RuntimeStateSnapshot(
     val phase: RunSessionPhase = RunSessionPhase.Idle,
     val runtimePrepared: Boolean = false,
     val runtimeRoot: String? = null,
+    val displayPowerOffActive: Boolean = false,
     val currentTaskId: String? = null,
     val lastMessage: String = "",
     val lastPing: String = "",
@@ -128,4 +142,11 @@ data class RuntimeStateSnapshot(
     val capabilities: RuntimeCapabilities = RuntimeCapabilities(),
     val lastFailure: FailureArtifact? = null,
     val lastDiagnosticsPath: String? = null,
+)
+
+@Serializable
+data class RuntimeLogChunk(
+    val nextOffsetBytes: Long = 0L,
+    val reset: Boolean = false,
+    val lines: List<String> = emptyList(),
 )

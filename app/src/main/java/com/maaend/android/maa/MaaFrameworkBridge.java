@@ -44,6 +44,10 @@ public final class MaaFrameworkBridge {
     private Pointer agentClient;
     private Process agentProcess;
     private File runtimeRootDir;
+    private String resourceName = "官服";
+    private String resourceLabel = "官服";
+    private List<String> resourcePaths = java.util.Collections.singletonList("./resource");
+    private String logLevel = "info";
     private long controllerSinkId = 0L;
     private long taskerSinkId = 0L;
     private long contextSinkId = 0L;
@@ -53,18 +57,32 @@ public final class MaaFrameworkBridge {
     private final MaaEventCallback taskerEventCallback = this::onMaaEvent;
     private final MaaEventCallback contextEventCallback = this::onMaaEvent;
 
-    public void init(Context context, File runtimeRoot) {
+    public void init(
+            Context context,
+            File runtimeRoot,
+            String selectedResourceName,
+            String selectedResourceLabel,
+            List<String> selectedResourcePaths,
+            String selectedLogLevel
+    ) {
         Log.i(TAG, "init start, runtimeRoot=" + runtimeRoot);
         if (!NativeBridgeLib.LOADED) {
             throw new IllegalStateException("bridge library failed to load");
         }
         runtimeRootDir = runtimeRoot;
+        resourceName = selectedResourceName == null || selectedResourceName.isBlank() ? "官服" : selectedResourceName;
+        resourceLabel = selectedResourceLabel == null || selectedResourceLabel.isBlank() ? resourceName : selectedResourceLabel;
+        resourcePaths = normalizeResourcePaths(selectedResourcePaths);
+        logLevel = normalizeLogLevel(selectedLogLevel);
         ensureLoaded(context, runtimeRoot);
+        applyFrameworkLogLevel();
         destroy();
 
         resource = requireHandle(library.MaaResourceCreate(), "create resource");
         Log.i(TAG, "resource created");
-        bundleResource(new File(runtimeRoot, "resource"));
+        for (String path : resourcePaths) {
+            bundleResource(new File(runtimeRoot, normalizeRuntimeRelativePath(path)));
+        }
         File resourceAdb = new File(runtimeRoot, "resource_adb");
         if (resourceAdb.isDirectory()) {
             bundleResource(resourceAdb);
@@ -553,9 +571,53 @@ public final class MaaFrameworkBridge {
 
         builder.environment().put("LD_LIBRARY_PATH", new File(runtimeRootDir, "maafw").getAbsolutePath());
         builder.environment().putAll(buildPiEnv());
+        builder.environment().put("MAAEND_GO_LOG_LEVEL", normalizeGoServiceLogLevel(logLevel));
 
         agentProcess = builder.start();
         Log.i(TAG, "started go-service process");
+    }
+
+    private void applyFrameworkLogLevel() {
+        IntByReference levelValue = new IntByReference(mapFrameworkStdoutLevel(logLevel));
+        boolean ok = library.MaaGlobalSetOption(
+                MAA_GLOBAL_OPTION_STDOUT_LEVEL,
+                levelValue.getPointer(),
+                Integer.BYTES
+        );
+        if (!ok) {
+            Log.w(TAG, "Failed to apply framework stdout log level: " + logLevel);
+        } else {
+            Log.i(TAG, "Applied framework stdout log level: " + logLevel);
+        }
+    }
+
+    private static int mapFrameworkStdoutLevel(String level) {
+        return switch (normalizeLogLevel(level)) {
+            case "error" -> MAA_LOG_LEVEL_ERROR;
+            case "warn" -> MAA_LOG_LEVEL_WARN;
+            case "debug" -> MAA_LOG_LEVEL_DEBUG;
+            default -> MAA_LOG_LEVEL_INFO;
+        };
+    }
+
+    private static String normalizeGoServiceLogLevel(String level) {
+        return switch (normalizeLogLevel(level)) {
+            case "error" -> "error";
+            case "warn" -> "warn";
+            case "debug" -> "debug";
+            default -> "info";
+        };
+    }
+
+    private static String normalizeLogLevel(String level) {
+        if (level == null) {
+            return "info";
+        }
+        String normalized = level.trim().toLowerCase(java.util.Locale.ROOT);
+        return switch (normalized) {
+            case "error", "warn", "info", "debug" -> normalized;
+            default -> "info";
+        };
     }
 
     private java.util.Map<String, String> buildPiEnv() {
@@ -587,13 +649,44 @@ public final class MaaFrameworkBridge {
     private String buildPiResourceJson() {
         try {
             JSONObject resource = new JSONObject();
-            resource.put("name", "官服");
-            resource.put("label", "官服");
-            resource.put("path", new org.json.JSONArray().put("./resource"));
+            resource.put("name", resourceName);
+            resource.put("label", resourceLabel);
+            org.json.JSONArray paths = new org.json.JSONArray();
+            for (String path : resourcePaths) {
+                paths.put(path);
+            }
+            resource.put("path", paths);
             return resource.toString();
         } catch (Exception error) {
             throw new IllegalStateException("failed to build PI_RESOURCE", error);
         }
+    }
+
+    private static List<String> normalizeResourcePaths(List<String> rawPaths) {
+        List<String> normalized = new ArrayList<>();
+        if (rawPaths != null) {
+            for (String rawPath : rawPaths) {
+                if (rawPath == null || rawPath.isBlank()) {
+                    continue;
+                }
+                String normalizedPath = rawPath.startsWith("./") ? rawPath : "./" + rawPath;
+                normalized.add(normalizedPath);
+            }
+        }
+        if (normalized.isEmpty()) {
+            normalized.add("./resource");
+        }
+        return normalized;
+    }
+
+    private static String normalizeRuntimeRelativePath(String rawPath) {
+        if (rawPath == null || rawPath.isBlank()) {
+            return "resource";
+        }
+        if (rawPath.startsWith("./")) {
+            return rawPath.substring(2);
+        }
+        return rawPath;
     }
 
     private static String buildControllerConfig(File runtimeRoot, Context context) {
@@ -842,6 +935,8 @@ public final class MaaFrameworkBridge {
     public interface MaaFrameworkLibrary extends Library {
         String MaaVersion();
 
+        boolean MaaGlobalSetOption(int key, Pointer value, long valSize);
+
         Pointer MaaResourceCreate();
 
         void MaaResourceDestroy(Pointer resource);
@@ -914,6 +1009,12 @@ public final class MaaFrameworkBridge {
 
         int MaaRectGetH(Pointer handle);
     }
+
+    private static final int MAA_GLOBAL_OPTION_STDOUT_LEVEL = 4;
+    private static final int MAA_LOG_LEVEL_ERROR = 2;
+    private static final int MAA_LOG_LEVEL_WARN = 3;
+    private static final int MAA_LOG_LEVEL_INFO = 4;
+    private static final int MAA_LOG_LEVEL_DEBUG = 5;
 
     public interface MaaEventCallback extends Callback {
         long invoke(Pointer handle, Pointer message, Pointer detailsJson, Pointer transArg);

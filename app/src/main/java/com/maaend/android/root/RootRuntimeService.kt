@@ -2,6 +2,7 @@ package com.maaend.android.root
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Process
 import android.util.Log
 import android.view.Surface
 import com.maaend.android.catalog.InterfaceCatalogLoader
@@ -12,11 +13,13 @@ import com.maaend.android.ipc.IRootRuntimeService
 import com.maaend.android.maa.MaaFrameworkBridge
 import com.maaend.android.model.FailureArtifact
 import com.maaend.android.model.RunRequest
+import com.maaend.android.model.RuntimeLogChunk
 import com.maaend.android.model.RunSessionPhase
 import com.maaend.android.model.RuntimeStateSnapshot
 import com.maaend.android.preview.ActivityUtils
 import com.maaend.android.preview.DefaultDisplayConfig
 import com.maaend.android.preview.VirtualDisplayManager
+import com.maaend.android.runtime.PersistentResourceRepositoryManager
 import com.maaend.android.runtime.RuntimeBootstrapper
 import com.maaend.android.runtime.RuntimeLogger
 import kotlinx.serialization.decodeFromString
@@ -68,6 +71,7 @@ class RootRuntimeService(
         runCatching {
             InputControlUtils.initialize(context)
             DriverClass.installContext(context)
+            DisplayPowerController.recoverIfNeeded(::log)
         }.onFailure { error ->
             Log.e(TAG, "Failed to initialize input controller", error)
         }
@@ -98,6 +102,7 @@ class RootRuntimeService(
                     phase = RunSessionPhase.Idle,
                     runtimePrepared = true,
                     runtimeRoot = result.runtimeRoot.absolutePath,
+                    displayPowerOffActive = DisplayPowerController.isDisplayPowerOffActive(),
                     capabilities = result.capabilities,
                     lastMessage = result.message,
                     recentLogs = runtimeLogger.tail(),
@@ -131,27 +136,33 @@ class RootRuntimeService(
 
         stopRequested = false
         currentFuture = executor.submit {
-            val tasks = request.sequenceTaskIds.ifEmpty {
-                request.taskId?.let(::listOf) ?: emptyList()
-            }
-            val optionOverridesByTask = request.optionOverridesByTask
+            val runLabel = request.taskId ?: request.presetId ?: "sequence"
+            val priorityState = elevateTaskExecutionThreadPriority(runLabel)
+            try {
+                val tasks = request.sequenceTaskIds.ifEmpty {
+                    request.taskId?.let(::listOf) ?: emptyList()
+                }
+                val optionOverridesByTask = request.optionOverridesByTask
 
-            if (tasks.isEmpty()) {
-                failRun(taskId = null, message = "No task to run")
-                return@submit
-            }
-
-            log("Run started: ${request.taskId ?: request.presetId}")
-            for (taskId in tasks) {
-                if (stopRequested) {
-                    completeRun(taskId, "Run stopped by user", RunSessionPhase.Completed)
+                if (tasks.isEmpty()) {
+                    failRun(taskId = null, message = "No task to run")
                     return@submit
                 }
-                if (!runSingleTask(taskId, optionOverridesByTask[taskId])) {
-                    return@submit
+
+                log("Run started: ${request.taskId ?: request.presetId}")
+                for (taskId in tasks) {
+                    if (stopRequested) {
+                        completeRun(taskId, "Run stopped by user", RunSessionPhase.Completed)
+                        return@submit
+                    }
+                    if (!runSingleTask(taskId, optionOverridesByTask[taskId], request.resourceName, request.logLevel)) {
+                        return@submit
+                    }
                 }
+                completeRun(tasks.last(), "Run completed", RunSessionPhase.Completed)
+            } finally {
+                restoreTaskExecutionThreadPriority(runLabel, priorityState)
             }
-            completeRun(tasks.last(), "Run completed", RunSessionPhase.Completed)
         }
         return true
     }
@@ -160,6 +171,7 @@ class RootRuntimeService(
         stopRequested = true
         maaBridge?.stop()
         preparedGameDisplayId = DefaultDisplayConfig.DISPLAY_NONE
+        ensureDisplayPowerOn("Run stopping, restoring screen power")
         updateSnapshot { it.copy(phase = RunSessionPhase.Stopping, lastMessage = "Stop requested") }
         currentFuture?.cancel(true)
         updateSnapshot { it.copy(phase = RunSessionPhase.Idle, currentTaskId = null, lastMessage = "Run stopped") }
@@ -208,9 +220,32 @@ class RootRuntimeService(
         VirtualDisplayManager.stop()
     }
 
+    override fun setDisplayPower(on: Boolean): Boolean {
+        val success = DisplayPowerController.setDisplayPower(on)
+        if (success) {
+            val message = if (on) "Screen power restored" else "Screen turned off for background run"
+            log(message)
+            updateSnapshot {
+                it.copy(
+                    displayPowerOffActive = DisplayPowerController.isDisplayPowerOffActive(),
+                    lastMessage = message,
+                    recentLogs = logger?.tail() ?: emptyList(),
+                )
+            }
+        } else {
+            log("Failed to change screen power: on=$on")
+        }
+        return success
+    }
+
     override fun getState(): String {
         val recentLogs = logger?.tail() ?: emptyList()
         return json.encodeToString(snapshot.copy(recentLogs = recentLogs))
+    }
+
+    override fun readLogChunk(offsetBytes: Long, maxBytes: Int): String {
+        val chunk = logger?.readChunk(offsetBytes, maxBytes) ?: RuntimeLogChunk()
+        return json.encodeToString(chunk)
     }
 
     override fun exportDiagnostics(): String {
@@ -250,6 +285,7 @@ class RootRuntimeService(
 
     override fun destroy() {
         stopRequested = true
+        DisplayPowerController.destroy(::log)
         VirtualDisplayManager.stop()
         maaBridge?.destroy()
         maaBridge = null
@@ -258,7 +294,7 @@ class RootRuntimeService(
         exitProcess(0)
     }
 
-    private fun runSingleTask(taskId: String, optionOverrideJson: String?): Boolean {
+    private fun runSingleTask(taskId: String, optionOverrideJson: String?, resourceName: String, logLevel: String): Boolean {
         updateSnapshot {
             it.copy(
                 phase = RunSessionPhase.Running,
@@ -272,7 +308,7 @@ class RootRuntimeService(
             "AndroidOpenGame" -> {
                 val capabilities = snapshot.capabilities
                 if (capabilities.hasBundledGoService && capabilities.hasBundledMaaFramework) {
-                    runAndroidOpenGameTask(optionOverrideJson)
+                    runAndroidOpenGameTask(optionOverrideJson, resourceName, logLevel)
                 } else {
                     val displayId = VirtualDisplayManager.getDisplayId()
                     val success = DriverClass.startApp(
@@ -296,13 +332,14 @@ class RootRuntimeService(
                     failRun(taskId, "Bundled Maa runtime missing. Stage runtime/agent/go-service and runtime/maafw first.")
                     false
                 } else {
-                    runAndroidNativeTask(taskId, optionOverrideJson)
+                    runAndroidNativeTask(taskId, optionOverrideJson, resourceName, logLevel)
                 }
             }
         }
     }
 
     private fun completeRun(taskId: String?, message: String, phase: RunSessionPhase) {
+        ensureDisplayPowerOn("Run completed, restoring screen power")
         log(message)
         updateSnapshot {
             it.copy(
@@ -315,6 +352,7 @@ class RootRuntimeService(
     }
 
     private fun failRun(taskId: String?, message: String) {
+        ensureDisplayPowerOn("Run failed, restoring screen power")
         log(message)
         val screenshotPath = captureFailureScreenshot(taskId)
         updateSnapshot {
@@ -322,6 +360,7 @@ class RootRuntimeService(
                 phase = RunSessionPhase.Failed,
                 currentTaskId = taskId,
                 lastMessage = message,
+                displayPowerOffActive = DisplayPowerController.isDisplayPowerOffActive(),
                 lastFailure = FailureArtifact(
                     taskId = taskId,
                     screenshotPath = screenshotPath,
@@ -379,14 +418,82 @@ class RootRuntimeService(
         }
     }
 
+    private fun ensureDisplayPowerOn(reason: String) {
+        if (!DisplayPowerController.isDisplayPowerOffActive()) {
+            return
+        }
+        runCatching { DisplayPowerController.setDisplayPower(true) }
+            .onSuccess { log(reason) }
+            .onFailure { error ->
+                log("Failed to restore screen power: ${error.message}")
+            }
+    }
+
     private fun updateSnapshot(transform: (RuntimeStateSnapshot) -> RuntimeStateSnapshot) {
         synchronized(stateLock) {
-            snapshot = transform(snapshot)
+            snapshot = transform(snapshot).copy(
+                displayPowerOffActive = DisplayPowerController.isDisplayPowerOffActive(),
+            )
         }
     }
 
     private fun log(message: String) {
         logger?.log(message)
+    }
+
+    private fun elevateTaskExecutionThreadPriority(runLabel: String): TaskExecutionThreadPriorityState {
+        val tid = Process.myTid()
+        val before = readThreadPriority(tid)
+        val after = runCatching {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+            readThreadPriority(tid)
+        }.getOrElse { error ->
+            log(
+                "Task execution thread priority raise failed: run=$runLabel tid=$tid " +
+                    "before=$before target=${Process.THREAD_PRIORITY_DISPLAY} error=${error.message}",
+            )
+            readThreadPriority(tid)
+        }
+        log(
+            "Task execution thread priority raised: run=$runLabel tid=$tid " +
+                "before=$before after=$after target=${Process.THREAD_PRIORITY_DISPLAY}",
+        )
+        return TaskExecutionThreadPriorityState(
+            tid = tid,
+            originalPriority = before,
+        )
+    }
+
+    private fun restoreTaskExecutionThreadPriority(
+        runLabel: String,
+        state: TaskExecutionThreadPriorityState,
+    ) {
+        val beforeRestore = readThreadPriority(state.tid)
+        val afterRestore = runCatching {
+            Process.setThreadPriority(state.originalPriority)
+            readThreadPriority(state.tid)
+        }.getOrElse { error ->
+            log(
+                "Task execution thread priority restore failed: run=$runLabel tid=${state.tid} " +
+                    "beforeRestore=$beforeRestore target=${state.originalPriority} error=${error.message}",
+            )
+            readThreadPriority(state.tid)
+        }
+        log(
+            "Task execution thread priority restored: run=$runLabel tid=${state.tid} " +
+                "beforeRestore=$beforeRestore afterRestore=$afterRestore target=${state.originalPriority}",
+        )
+    }
+
+    private fun readThreadPriority(tid: Int): Int {
+        return runCatching { Process.getThreadPriority(tid) }
+            .getOrElse { error ->
+                log(
+                    "Task execution thread priority read failed: tid=$tid " +
+                        "default=${Process.THREAD_PRIORITY_DEFAULT} error=${error.message}",
+                )
+                Process.THREAD_PRIORITY_DEFAULT
+            }
     }
 
     private inline fun dispatchWindowTouch(
@@ -407,7 +514,7 @@ class RootRuntimeService(
         return RuntimeBootstrapper.defaultRuntimeRoot(context)
     }
 
-    private fun runAndroidNativeTask(taskId: String, optionOverrideJson: String?): Boolean {
+    private fun runAndroidNativeTask(taskId: String, optionOverrideJson: String?, resourceName: String, logLevel: String): Boolean {
         val entry = resolveTaskEntry(taskId)
         if (entry == null) {
             failRun(taskId, "Task entry not found for $taskId")
@@ -417,8 +524,16 @@ class RootRuntimeService(
         val overrideJson = mergeOverrideJson(buildAndroidTaskOverride(taskId), optionOverrideJson)
         log("runAndroidNativeTask start: taskId=$taskId, entry=$entry, override=$overrideJson")
         return runCatching {
+            val resource = resolveResourceDescriptor(resourceName)
             val bridge = MaaFrameworkBridge().also {
-                it.init(context, runtimeRoot ?: runtimeRootDirectory())
+                it.init(
+                    context,
+                    runtimeRoot ?: runtimeRootDirectory(),
+                    resource?.id,
+                    resource?.label,
+                    resource?.paths,
+                    logLevel,
+                )
             }
             maaBridge?.destroy()
             maaBridge = bridge
@@ -439,12 +554,20 @@ class RootRuntimeService(
         }
     }
 
-    private fun runAndroidOpenGameTask(optionOverrideJson: String?): Boolean {
+    private fun runAndroidOpenGameTask(optionOverrideJson: String?, resourceName: String, logLevel: String): Boolean {
         log("runAndroidOpenGameTask start")
         return runCatching {
             ensureWindowedDisplay()
+            val resource = resolveResourceDescriptor(resourceName)
             val bridge = MaaFrameworkBridge().also {
-                it.init(context, runtimeRoot ?: runtimeRootDirectory())
+                it.init(
+                    context,
+                    runtimeRoot ?: runtimeRootDirectory(),
+                    resource?.id,
+                    resource?.label,
+                    resource?.paths,
+                    logLevel,
+                )
             }
             maaBridge?.destroy()
             maaBridge = bridge
@@ -528,12 +651,24 @@ class RootRuntimeService(
     }
 
     private fun resolveTaskEntry(taskId: String): String? {
-        return runCatching { catalogLoader.load() }
+        return runCatching { loadCatalogSnapshot() }
             .getOrNull()
             ?.tasks
             ?.firstOrNull { it.id == taskId }
             ?.entry
             ?.takeIf { it.isNotBlank() }
+    }
+
+    private fun resolveResourceDescriptor(resourceName: String): com.maaend.android.model.ResourceDescriptor? {
+        val catalog = runCatching { loadCatalogSnapshot() }.getOrNull()
+        return catalog?.resources?.firstOrNull { it.id == resourceName }
+            ?: catalog?.resources?.firstOrNull()
+    }
+
+    private fun loadCatalogSnapshot() = if (PersistentResourceRepositoryManager.loadStatus(context).available) {
+        catalogLoader.loadFromDirectory(PersistentResourceRepositoryManager.currentRoot(context))
+    } else {
+        catalogLoader.load()
     }
 
     private fun buildAndroidTaskOverride(taskId: String): String {
@@ -582,4 +717,9 @@ class RootRuntimeService(
     private companion object {
         const val TAG = "RootRuntimeService"
     }
+
+    private data class TaskExecutionThreadPriorityState(
+        val tid: Int,
+        val originalPriority: Int,
+    )
 }
