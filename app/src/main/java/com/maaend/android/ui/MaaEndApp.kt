@@ -101,7 +101,6 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -924,7 +923,7 @@ private fun TaskListPanel(
 }
 
 @Composable
-private fun PartialSupportDivider() {
+private fun TaskSectionDivider() {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1632,6 +1631,9 @@ private fun FullscreenPreviewOverlay(
     val context = LocalContext.current
     val activity = context.findActivity()
     val fullscreenProgress = remember { Animatable(0f) }
+    val activeTouches = remember { mutableMapOf<Int, PreviewPoint>() }
+    val contactIdsByPointer = remember { mutableMapOf<Long, Int>() }
+    val nextContactId = remember { intArrayOf(0) }
 
     DisposableEffect(activity) {
         val window = activity?.window
@@ -1656,6 +1658,16 @@ private fun FullscreenPreviewOverlay(
         }
     }
 
+    DisposableEffect(viewModel) {
+        onDispose {
+            activeTouches.toMap().forEach { (contactId, point) ->
+                viewModel.onPreviewTouchUp(contactId, point.x, point.y)
+            }
+            activeTouches.clear()
+            contactIdsByPointer.clear()
+        }
+    }
+
     LaunchedEffect(activity) {
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         fullscreenProgress.snapTo(0f)
@@ -1669,41 +1681,75 @@ private fun FullscreenPreviewOverlay(
             .fillMaxSize()
             .background(Color.Black)
             .pointerInput(Unit) {
-                var touchActive = false
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull() ?: continue
-                        val point = mapViewToVirtualDisplay(
-                            viewX = change.position.x,
-                            viewY = change.position.y,
-                            viewWidth = size.width,
-                            viewHeight = size.height,
-                            bufferWidth = DefaultDisplayConfig.WIDTH,
-                            bufferHeight = DefaultDisplayConfig.HEIGHT,
-                            clampToBounds = touchActive && event.type != PointerEventType.Press,
-                        )
-                        when (event.type) {
-                            PointerEventType.Press -> {
-                                touchActive = point?.let { viewModel.onPreviewTouchDown(it.x, it.y) } == true
-                            }
-
-                            PointerEventType.Move -> {
-                                if (touchActive && change.pressed && point != null) {
-                                    viewModel.onPreviewTouchMove(point.x, point.y)
-                                }
-                            }
-
-                            PointerEventType.Release -> {
-                                if (touchActive && point != null) {
-                                    viewModel.onPreviewTouchUp(point.x, point.y)
-                                }
-                                touchActive = false
-                            }
-
-                            else -> Unit
+                        val changes = event.changes
+                        if (changes.isEmpty()) {
+                            continue
                         }
-                        change.consume()
+
+                        changes
+                            .filter { !it.previousPressed && it.pressed }
+                            .forEach { change ->
+                                val point = mapViewToVirtualDisplay(
+                                    viewX = change.position.x,
+                                    viewY = change.position.y,
+                                    viewWidth = size.width,
+                                    viewHeight = size.height,
+                                    bufferWidth = DefaultDisplayConfig.WIDTH,
+                                    bufferHeight = DefaultDisplayConfig.HEIGHT,
+                                    clampToBounds = false,
+                                ) ?: return@forEach
+                                val pointerToken = change.id.value
+                                val contactId = contactIdsByPointer.getOrPut(pointerToken) { nextContactId[0]++ }
+                                if (viewModel.onPreviewTouchDown(contactId, point.x, point.y)) {
+                                    activeTouches[contactId] = point
+                                } else {
+                                    contactIdsByPointer.remove(pointerToken)
+                                }
+                            }
+
+                        changes
+                            .filter { it.previousPressed && it.pressed && it.position != it.previousPosition }
+                            .forEach { change ->
+                                val pointerToken = change.id.value
+                                val contactId = contactIdsByPointer[pointerToken] ?: return@forEach
+                                val point = mapViewToVirtualDisplay(
+                                    viewX = change.position.x,
+                                    viewY = change.position.y,
+                                    viewWidth = size.width,
+                                    viewHeight = size.height,
+                                    bufferWidth = DefaultDisplayConfig.WIDTH,
+                                    bufferHeight = DefaultDisplayConfig.HEIGHT,
+                                    clampToBounds = true,
+                                ) ?: return@forEach
+                                activeTouches[contactId] = point
+                                viewModel.onPreviewTouchMove(contactId, point.x, point.y)
+                            }
+
+                        changes
+                            .filter { it.previousPressed && !it.pressed }
+                            .forEach { change ->
+                                val pointerToken = change.id.value
+                                val contactId = contactIdsByPointer[pointerToken] ?: return@forEach
+                                val point = mapViewToVirtualDisplay(
+                                    viewX = change.position.x,
+                                    viewY = change.position.y,
+                                    viewWidth = size.width,
+                                    viewHeight = size.height,
+                                    bufferWidth = DefaultDisplayConfig.WIDTH,
+                                    bufferHeight = DefaultDisplayConfig.HEIGHT,
+                                    clampToBounds = true,
+                                ) ?: activeTouches[contactId]
+                                if (point != null) {
+                                    viewModel.onPreviewTouchUp(contactId, point.x, point.y)
+                                }
+                                activeTouches.remove(contactId)
+                                contactIdsByPointer.remove(pointerToken)
+                            }
+
+                        changes.forEach { it.consume() }
                     }
                 }
             },

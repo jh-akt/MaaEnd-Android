@@ -577,16 +577,16 @@ class MainViewModel(
         }
     }
 
-    fun onPreviewTouchDown(x: Int, y: Int): Boolean {
-        return runCatching { service?.touchDown(x, y) ?: false }.getOrDefault(false)
+    fun onPreviewTouchDown(contactId: Int, x: Int, y: Int): Boolean {
+        return runCatching { service?.touchDown(contactId, x, y) ?: false }.getOrDefault(false)
     }
 
-    fun onPreviewTouchMove(x: Int, y: Int): Boolean {
-        return runCatching { service?.touchMove(x, y) ?: false }.getOrDefault(false)
+    fun onPreviewTouchMove(contactId: Int, x: Int, y: Int): Boolean {
+        return runCatching { service?.touchMove(contactId, x, y) ?: false }.getOrDefault(false)
     }
 
-    fun onPreviewTouchUp(x: Int, y: Int): Boolean {
-        return runCatching { service?.touchUp(x, y) ?: false }.getOrDefault(false)
+    fun onPreviewTouchUp(contactId: Int, x: Int, y: Int): Boolean {
+        return runCatching { service?.touchUp(contactId, x, y) ?: false }.getOrDefault(false)
     }
 
     fun getWindowedDisplayId(): Int {
