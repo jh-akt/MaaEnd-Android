@@ -4,73 +4,129 @@
   <img alt="MaaEnd Android app icon" src="docs/branding/app-icon-1024.png" width="160" height="160" />
 </p>
 
-`MaaEnd Android` 是 MaaEnd 的 Android Root 宿主应用，面向已经 Root 的 arm64 设备，负责运行时准备、Root Runtime 拉起、虚拟显示预览、任务配置与实时日志展示。
+`MaaEnd Android` 是一个面向已 Root Android 设备的 `MaaEnd` 宿主应用。它负责在手机上准备运行时、拉起 Root Runtime、同步上游任务资源、展示预览与日志，并直接执行 `MaaEnd` 任务。
 
-当前仓库当前公开发布版本为 `1.0.1`。
+当前公开版本：`1.0.2`
 
-## 1.0.1 包含内容
+## 项目定位
 
-- Root-only Android 宿主应用与 Root Runtime 启动链路
-- 运行时文件打包、资源目录准备与 GitHub 资源更新
-- MaaFramework 任务执行、预设/任务配置与运行状态展示
-- 预览窗口、截图链路与实时日志页面
-- 仅保留内存态的日志页数据，杀后台后自动清空
+- 目标平台：`Android 11+`
+- 目标架构：`arm64-v8a`
+- 使用前提：设备必须已经获取 `Root`
+- 当前定位：`Root-only`，不提供 `Shizuku` 或无 Root 兼容路径
 
-## 运行要求
+如果设备没有 Root，本项目就不能正常完成运行时拉起、输入注入、虚拟显示控制和任务执行。
 
-- Android 11 及以上
-- `arm64-v8a`
-- 已获取 Root 权限
-- 默认构建与打包不会读取同级 `../MaaEnd` 仓库
+## 参考项目
+
+本项目是在 Android 侧承载 `MaaEnd` 的一次工程化实现，开发过程中直接参考或复用了这些上游项目的设计与运行时能力：
+
+- [MaaEnd](https://github.com/MaaEnd/MaaEnd)
+  - 提供任务定义、界面元数据、资源目录结构，以及 Android 端需要兼容的任务入口与资源组织方式。
+- [MaaFramework](https://github.com/MaaXYZ/MaaFramework)
+  - 提供任务执行框架与运行时核心能力。
+- [maa-framework-go](https://github.com/MaaXYZ/maa-framework-go)
+  - 本项目中的 `go-runner` 通过它调用 `MaaFramework` 并绑定 Android 控制器。
+- [libsu](https://github.com/topjohnwu/libsu)
+  - 用于申请和维持 Root Shell / Root Service，是当前 Android 端 Root 链路的基础。
+
+这不是 `MaaEnd` 官方上游仓库，而是一个 Android Root 宿主实现。
+
+## 数据来源
+
+运行时真正使用的任务与资源数据，默认来自 `MaaEnd` GitHub 仓库：
+
+- 主仓库：`MaaEnd/MaaEnd`
+- 默认分支：`v2`
+- 资源同步范围：上游 `assets/` 下的 `interface`、`tasks`、`resource`、`resource_adb` 等目录
+- 模型资源：启动同步时会额外解析并下载 `MaaEnd-AI` 子模块对应版本
+
+也就是说：
+
+- APK 默认不会把完整 `MaaEnd` 任务资源直接打进包里
+- 首次启动或资源失效时，应用会从 GitHub 同步上游资源到本地缓存
+- 任务列表、任务中文名、任务参数和大部分图像资源都以同步到本地的 `MaaEnd` 数据为准
+
+如果你只是编译这个仓库，不额外同步 GitHub 资源，应用可以启动，但并不等于所有任务都具备可运行的完整资源。
+
+## Root 要求
+
+`Root` 不是可选项，而是硬性前提。
+
+本项目当前依赖 Root 来完成这些核心能力：
+
+- 拉起和维持特权运行时
+- 注入触摸、按键和多指输入
+- 建立预览所需的显示控制链路
+- 让 `MaaFramework` 与 Android 控制器在同一条特权执行链上工作
+
+因此当前不支持：
+
+- 无 Root 设备
+- 仅 ADB 权限直接运行
+- `Shizuku` 兼容模式
 
 ## 快速开始
 
-1. 准备运行时文件：
-   - `runtime/agent/go-service`
-   - `runtime/agent/maa-go-runner`
-   - `runtime/maafw/`
-2. 首次启动应用时保持联网，应用会自动同步 `MaaEnd` GitHub 资源仓库。
-3. 构建 APK：
-   - 调试包：`./gradlew assembleDebug`
-   - 发布包：`./gradlew assembleRelease`
-4. 安装到设备：`adb install -r app/build/outputs/apk/debug/app-debug.apk`
+### 1. 准备运行时文件
+
+构建前需要准备这些运行时内容：
+
+- `runtime/agent/go-service`
+- `runtime/agent/maa-go-runner`
+- `runtime/maafw/`
+
+其中：
+
+- `go-service` 必须是 Android 可执行文件，不是桌面 Linux ELF
+- `runtime/maafw/` 里需要包含可用于 Android 的 `MaaFramework` 相关 so
+
+### 2. 编译 APK
+
+```bash
+./gradlew assembleDebug
+./gradlew assembleRelease
+```
+
+默认产物位置：
+
+- Debug: `app/build/outputs/apk/debug/app-debug.apk`
+- Release: `app/build/outputs/apk/release/app-release.apk`
+
+### 3. 安装到真机
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 4. 首次启动
+
+- 首次启动请保持联网
+- 应用会同步 `MaaEnd` GitHub 资源仓库
+- 只有在 Root 可用、运行时完整、资源同步完成后，任务执行能力才会完整可用
 
 ## 仓库结构
 
-- `app/`：Android 应用、Root Runtime 桥接、Compose UI 与测试
-- `runtime/`：本地打包时需要放入的 Android 运行时二进制
-- `tools/`：运行时准备与 Go runner 相关工具
-- `docs/`：会话总结、开发备忘与发布素材
-
-## 运行时打包说明
-
-打包时会组合以下来源：
-
-- 当前仓库 `runtime/` 下的 Android 可执行文件与 MaaFramework so
-- 构建阶段生成的 `bundled_runtime` 运行时目录
-
-`interface/tasks/resource` 与 `__Private` 辅助资源都不再内置到 APK，首次启动和运行前会从 `MaaEnd` GitHub 仓库同步到本地缓存。
-
-如果 `runtime/` 为空，应用仍可启动，但完整任务执行能力不会可用。
+- `app/`：Android 应用、Root Runtime 桥接、Compose UI、AIDL 和测试
+- `runtime/`：随 APK 一起打包或运行前准备的 Android 运行时二进制
+- `tools/`：运行时准备脚本和 `go-runner`
+- `docs/`：开发记录、排障文档和发布素材
 
 ## 开源协议
 
-本仓库源码采用 `GNU Affero General Public License v3.0` (`AGPL-3.0`) 发布，详见 [LICENSE](LICENSE)。
+本仓库源码采用 [GNU Affero General Public License v3.0](LICENSE) 发布，也就是 `AGPL-3.0`。
 
-需要特别注意：
+需要特别注意两层边界：
 
-- 本仓库与 MaaEnd 上游资源协议保持一致；如果你显式复用上游源码、运行时或同步资源，仍需分别遵守对应组件的许可证与归属说明。
-- 构建或发布 APK 时，如果你一并分发了运行时二进制、资源、模型或其他第三方组件，还需要分别遵守这些组件各自的许可证与归属说明。
-- 本仓库不会覆盖或改变 MaaFramework、模型资源以及其他第三方依赖原有的许可证。
+1. 本仓库自己的 Android 代码，遵循本仓库 `LICENSE` 中声明的 `AGPL-3.0`。
+2. 运行时依赖、上游资源和第三方组件，不会因为进入这个仓库就自动改成 `AGPL-3.0`。
 
-## 安全与发布建议
+这意味着如果你分发、修改或二次开发本项目，还需要分别遵守对应上游组件的许可证和归属要求，尤其包括但不限于：
 
-- 不要提交 `local.properties`、签名文件、私有 token、用户日志、截图或诊断包。
-- 发布前至少执行一次敏感信息扫描与一次 `assembleRelease` 验证。
-- 若需要 GitHub Release，推荐使用 `v1.0.1` 形式的 tag，与 `versionName` 保持一致。
+- `MaaEnd` 上游任务与资源
+- `MaaFramework` 及其相关运行时
+- `maa-framework-go`
+- `libsu`
+- 你自行打包进 APK 或运行时目录的其他二进制、模型和资源
 
-## 开发说明
-
-- 构建脚本会在 `preBuild` 阶段准备打包资产与 JNI so。
-- 运行期日志文件正常落盘，但日志页面只消费实时内存增量，不会回读旧日志文件。
-- 最近一次 Android 端开发总结见 `docs/SESSION_SUMMARY.md`。
+如果你打算公开发布自己的修改版 APK，建议在发布前逐项确认这些上游组件的许可证兼容性与归属说明。
