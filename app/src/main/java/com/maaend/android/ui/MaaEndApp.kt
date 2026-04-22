@@ -870,8 +870,8 @@ private fun TaskListPanel(
     onToggleChecked: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val (regularTasks, partialSupportTasks) = tasks.partition {
-        it.id !in InterfaceCatalogLoader.PARTIAL_SUPPORT_TASK_IDS
+    val (pinnedTasks, otherTasks) = tasks.partition {
+        it.id in InterfaceCatalogLoader.PINNED_TASK_IDS
     }
     Column(
         modifier = modifier
@@ -896,7 +896,7 @@ private fun TaskListPanel(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    regularTasks.forEach { task ->
+                    pinnedTasks.forEach { task ->
                         TaskCard(
                             task = task,
                             selected = task.id == selectedTaskId,
@@ -905,9 +905,9 @@ private fun TaskListPanel(
                             onToggleChecked = { checked -> onToggleChecked(task.id, checked) },
                         )
                     }
-                    if (partialSupportTasks.isNotEmpty()) {
-                        PartialSupportDivider()
-                        partialSupportTasks.forEach { task ->
+                    if (otherTasks.isNotEmpty()) {
+                        TaskSectionDivider()
+                        otherTasks.forEach { task ->
                             TaskCard(
                                 task = task,
                                 selected = task.id == selectedTaskId,

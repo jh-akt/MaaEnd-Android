@@ -25,7 +25,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class InterfaceCatalogLoader(
-    private val assets: AssetManager,
+    private val assets: AssetManager? = null,
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -122,7 +122,7 @@ class InterfaceCatalogLoader(
         optionRoot: JsonObject,
     ): TaskDescriptor? {
         val id = obj["name"].primitiveContent() ?: return null
-        val tier = tierForTask(id) ?: return null
+        val tier = tierForTask(id)
         val controllers = stringArray(obj["controller"])
         if (!controllers.isEmpty() && controllers.none { it.equals("ADB", ignoreCase = true) }) {
             return null
@@ -313,12 +313,11 @@ class InterfaceCatalogLoader(
         }
     }
 
-    private fun tierForTask(id: String): TaskTier? {
-        return when {
-            MVP_TASK_ORDER.contains(id) -> TaskTier.MVP
-            STRETCH_TASKS.contains(id) -> TaskTier.STRETCH
-            PARTIAL_SUPPORT_TASK_ORDER.contains(id) -> TaskTier.STRETCH
-            else -> null
+    private fun tierForTask(id: String): TaskTier {
+        return if (MVP_TASK_ORDER.contains(id)) {
+            TaskTier.MVP
+        } else {
+            TaskTier.STRETCH
         }
     }
 
@@ -337,7 +336,8 @@ class InterfaceCatalogLoader(
     }
 
     private fun readText(path: String): String {
-        return assets.open(path).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val assetManager = checkNotNull(assets) { "AssetManager is required when loading catalog from packaged assets" }
+        return assetManager.open(path).bufferedReader(Charsets.UTF_8).use { it.readText() }
     }
 
     private fun parseJsonObject(text: String): JsonObject {
@@ -382,21 +382,11 @@ class InterfaceCatalogLoader(
         }
 
         private fun taskGroupRank(id: String): Int {
-            return when {
-                MVP_TASK_ORDER.contains(id) -> 0
-                STRETCH_TASKS.contains(id) -> 1
-                PARTIAL_SUPPORT_TASK_ORDER.contains(id) -> 2
-                else -> Int.MAX_VALUE
-            }
+            return if (PINNED_TASK_IDS.contains(id)) 0 else 1
         }
 
         private fun taskOrderInGroup(id: String): Int {
-            return when {
-                MVP_TASK_ORDER.contains(id) -> MVP_TASK_ORDER.indexOf(id)
-                STRETCH_TASKS.contains(id) -> STRETCH_TASK_ORDER.indexOf(id).takeIf { it >= 0 } ?: Int.MAX_VALUE
-                PARTIAL_SUPPORT_TASK_ORDER.contains(id) -> PARTIAL_SUPPORT_TASK_ORDER.indexOf(id)
-                else -> Int.MAX_VALUE
-            }
+            return PINNED_TASK_ORDER.indexOf(id).takeIf { it >= 0 } ?: Int.MAX_VALUE
         }
 
         val MVP_TASK_ORDER = listOf(
@@ -407,26 +397,11 @@ class InterfaceCatalogLoader(
             "SellProduct",
         )
 
-        val STRETCH_TASK_ORDER = listOf(
+        val PINNED_TASK_ORDER = MVP_TASK_ORDER + listOf(
             "DeliveryJobs",
             "DailyRewards",
         )
 
-        val STRETCH_TASKS = STRETCH_TASK_ORDER.toSet()
-
-        val PARTIAL_SUPPORT_TASK_ORDER = listOf(
-            "GearAssembly",
-            "AutoEssence",
-            "EnvironmentMonitoring",
-            "Crafting",
-            "WeaponUpgrade",
-            "AutoUseSpMedication",
-            "SimpleProductionBatchStart",
-            "ReceiveProdManual",
-            "BakerEntry",
-            "ReadAllWiki",
-        )
-
-        val PARTIAL_SUPPORT_TASK_IDS = PARTIAL_SUPPORT_TASK_ORDER.toSet()
+        val PINNED_TASK_IDS = PINNED_TASK_ORDER.toSet()
     }
 }
