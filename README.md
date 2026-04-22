@@ -23,6 +23,8 @@
 
 - [MaaEnd](https://github.com/MaaEnd/MaaEnd)
   - 提供任务定义、界面元数据、资源目录结构，以及 Android 端需要兼容的任务入口与资源组织方式。
+- [MAA-Meow](https://github.com/Aliothmoon/MAA-Meow)
+  - 在 Android 宿主形态、移动端交互组织和设备侧运行体验上提供了重要参考。
 - [MaaFramework](https://github.com/MaaXYZ/MaaFramework)
   - 提供任务执行框架与运行时核心能力。
 - [maa-framework-go](https://github.com/MaaXYZ/maa-framework-go)
