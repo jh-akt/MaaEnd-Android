@@ -17,6 +17,7 @@ import com.maaend.android.model.RuntimeLogChunk
 import com.maaend.android.model.RuntimeStateSnapshot
 import com.maaend.android.model.TaskDescriptor
 import com.maaend.android.model.TaskOptionDescriptor
+import com.maaend.android.model.TaskSequenceSupport
 import com.maaend.android.root.RootManager
 import com.maaend.android.root.RootRuntimeConnector
 import com.maaend.android.runtime.PersistentResourceRepositoryManager
@@ -268,13 +269,20 @@ class MainViewModel(
     }
 
     fun startSelectedTask() {
-        val tasks = checkedTasksInOrder().ifEmpty {
+        val requestedTasks = checkedTasksInOrder().ifEmpty {
             selectedTask()?.let(::listOf).orEmpty()
         }
-        if (tasks.isEmpty()) {
+        if (requestedTasks.isEmpty()) {
             return
         }
         val selectedResource = selectedResource()
+        val tasks = TaskSequenceSupport.ensureOpenGameFirst(
+            tasks = requestedTasks,
+            availableTasks = visibleTasks(
+                _uiState.value.catalog.tasks,
+                selectedResource?.id,
+            ),
+        )
         val validationError = validateSelections(tasks, selectedResource)
         if (validationError != null) {
             _uiState.value = _uiState.value.copy(lastMessage = validationError)

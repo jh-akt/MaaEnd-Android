@@ -9,6 +9,7 @@ import com.maaend.android.model.TaskOptionDescriptor
 import com.maaend.android.model.TaskOptionInput
 import com.maaend.android.model.TaskOptionType
 import com.maaend.android.model.TaskDescriptor
+import com.maaend.android.model.TaskSequenceSupport
 import com.maaend.android.model.TaskTier
 import java.io.File
 import kotlinx.serialization.json.Json
@@ -377,8 +378,7 @@ class InterfaceCatalogLoader(
 
     companion object {
         private fun ensureOpenGameFirst(taskIds: List<String>): List<String> {
-            val filtered = taskIds.filterNot { it == "AndroidOpenGame" }
-            return listOf("AndroidOpenGame") + filtered
+            return TaskSequenceSupport.ensureOpenGameFirst(taskIds)
         }
 
         private fun taskGroupRank(id: String): Int {

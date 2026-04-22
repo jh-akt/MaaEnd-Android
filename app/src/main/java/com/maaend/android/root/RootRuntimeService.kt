@@ -16,6 +16,7 @@ import com.maaend.android.model.RunRequest
 import com.maaend.android.model.RuntimeLogChunk
 import com.maaend.android.model.RunSessionPhase
 import com.maaend.android.model.RuntimeStateSnapshot
+import com.maaend.android.model.TaskSequenceSupport
 import com.maaend.android.preview.ActivityUtils
 import com.maaend.android.preview.DefaultDisplayConfig
 import com.maaend.android.preview.VirtualDisplayManager
@@ -55,6 +56,9 @@ class RootRuntimeService(
 
     @Volatile
     private var stopRequested = false
+
+    @Volatile
+    private var clearPreparedGameDisplayOnStopRequested = false
 
     @Volatile
     private var maaBridge: MaaFrameworkBridge? = null
@@ -135,6 +139,7 @@ class RootRuntimeService(
         }
 
         stopRequested = false
+        clearPreparedGameDisplayOnStopRequested = false
         currentFuture = executor.submit {
             val runLabel = request.taskId ?: request.presetId ?: "sequence"
             val priorityState = elevateTaskExecutionThreadPriority(runLabel)
@@ -142,15 +147,20 @@ class RootRuntimeService(
                 val tasks = request.sequenceTaskIds.ifEmpty {
                     request.taskId?.let(::listOf) ?: emptyList()
                 }
+                val normalizedTasks = TaskSequenceSupport.ensureOpenGameFirst(tasks)
                 val optionOverridesByTask = request.optionOverridesByTask
 
-                if (tasks.isEmpty()) {
+                if (normalizedTasks.isEmpty()) {
                     failRun(taskId = null, message = "No task to run")
                     return@submit
                 }
+                if (normalizedTasks != tasks) {
+                    log("Normalized task sequence: ${normalizedTasks.joinToString(", ")}")
+                }
 
-                log("Run started: ${request.taskId ?: request.presetId}")
-                for (taskId in tasks) {
+                val runStartLabel = request.presetId ?: normalizedTasks.first()
+                log("Run started: $runStartLabel")
+                for (taskId in normalizedTasks) {
                     if (stopRequested) {
                         completeRun(taskId, "Run stopped by user", RunSessionPhase.Completed)
                         return@submit
@@ -159,7 +169,7 @@ class RootRuntimeService(
                         return@submit
                     }
                 }
-                completeRun(tasks.last(), "Run completed", RunSessionPhase.Completed)
+                completeRun(normalizedTasks.last(), "Run completed", RunSessionPhase.Completed)
             } finally {
                 restoreTaskExecutionThreadPriority(runLabel, priorityState)
             }
@@ -169,8 +179,9 @@ class RootRuntimeService(
 
     override fun stopRun() {
         stopRequested = true
+        clearPreparedGameDisplayOnStopRequested = true
         maaBridge?.stop()
-        preparedGameDisplayId = DefaultDisplayConfig.DISPLAY_NONE
+        clearPreparedGameDisplayOnStopIfNeeded()
         ensureDisplayPowerOn("Run stopping, restoring screen power")
         updateSnapshot { it.copy(phase = RunSessionPhase.Stopping, lastMessage = "Stop requested") }
         currentFuture?.cancel(true)
@@ -339,6 +350,7 @@ class RootRuntimeService(
     }
 
     private fun completeRun(taskId: String?, message: String, phase: RunSessionPhase) {
+        clearPreparedGameDisplayOnStopRequested = false
         ensureDisplayPowerOn("Run completed, restoring screen power")
         log(message)
         updateSnapshot {
@@ -352,6 +364,7 @@ class RootRuntimeService(
     }
 
     private fun failRun(taskId: String?, message: String) {
+        clearPreparedGameDisplayOnStopRequested = false
         ensureDisplayPowerOn("Run failed, restoring screen power")
         log(message)
         val screenshotPath = captureFailureScreenshot(taskId)
@@ -427,6 +440,14 @@ class RootRuntimeService(
             .onFailure { error ->
                 log("Failed to restore screen power: ${error.message}")
             }
+    }
+
+    private fun clearPreparedGameDisplayOnStopIfNeeded() {
+        if (!clearPreparedGameDisplayOnStopRequested) {
+            return
+        }
+        preparedGameDisplayId = DefaultDisplayConfig.DISPLAY_NONE
+        clearPreparedGameDisplayOnStopRequested = false
     }
 
     private fun updateSnapshot(transform: (RuntimeStateSnapshot) -> RuntimeStateSnapshot) {
@@ -538,10 +559,7 @@ class RootRuntimeService(
             maaBridge?.destroy()
             maaBridge = bridge
             log("Loaded MaaFramework ${bridge.version()}")
-            if (taskId != "AndroidOpenGame") {
-                ensureGameReady(bridge)
-                normalizeSceneForTask(taskId)
-            }
+            normalizeSceneForTask(taskId)
             val result = bridge.runTask(entry, overrideJson)
             log("runAndroidNativeTask result: success=${result.success}, message=${result.message}")
             if (!result.success) {
@@ -587,29 +605,6 @@ class RootRuntimeService(
         }
     }
 
-    private fun ensureGameReady(
-        bridge: MaaFrameworkBridge,
-        optionOverrideJson: String? = null,
-    ) {
-        val targetDisplayId = ensureWindowedDisplay()
-        val packageName = "com.hypergryph.endfield"
-        val runningDisplayId = getRunningPackageDisplayId(packageName)
-        val alreadyPrepared =
-            preparedGameDisplayId == targetDisplayId &&
-                runningDisplayId == targetDisplayId
-        if (alreadyPrepared) {
-            log("preflight AndroidOpenGame skipped: game already prepared on display=$targetDisplayId")
-            return
-        }
-        val entry = resolveTaskEntry("AndroidOpenGame")
-            ?: error("Task entry not found for AndroidOpenGame")
-        val overrideJson = optionOverrideJson ?: "{}"
-        val result = bridge.runTask(entry, overrideJson)
-        log("preflight AndroidOpenGame: success=${result.success}, message=${result.message}")
-        check(result.success) { "preflight AndroidOpenGame failed: ${result.message}" }
-        preparedGameDisplayId = targetDisplayId
-    }
-
     private fun ensureWindowedDisplay(): Int {
         val existingDisplayId = VirtualDisplayManager.getDisplayId()
         if (existingDisplayId != DefaultDisplayConfig.DISPLAY_NONE) {
@@ -624,30 +619,6 @@ class RootRuntimeService(
 
     private fun normalizeSceneForTask(taskId: String) {
         return
-    }
-
-    private fun getRunningPackageDisplayId(packageName: String): Int? {
-        val command = """
-            dumpsys activity activities | awk '
-                /Display #[0-9]+/ {
-                    display = $2;
-                    gsub(":", "", display);
-                    gsub("#", "", display);
-                }
-                $0 ~ /packageName=$packageName/ {
-                    print display;
-                    exit;
-                }
-            '
-        """.trimIndent()
-        return runCatching {
-            val process = ProcessBuilder("/system/bin/sh", "-c", command)
-                .redirectErrorStream(true)
-                .start()
-            val output = process.inputStream.bufferedReader().use { it.readText().trim() }
-            process.waitFor()
-            output.toIntOrNull()
-        }.getOrNull()
     }
 
     private fun resolveTaskEntry(taskId: String): String? {

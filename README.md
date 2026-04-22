@@ -6,9 +6,9 @@
 
 `MaaEnd Android` 是 MaaEnd 的 Android Root 宿主应用，面向已经 Root 的 arm64 设备，负责运行时准备、Root Runtime 拉起、虚拟显示预览、任务配置与实时日志展示。
 
-当前仓库以 `1.0.0` 作为首个公开发布版本。
+当前仓库当前公开发布版本为 `1.0.1`。
 
-## 1.0.0 包含内容
+## 1.0.1 包含内容
 
 - Root-only Android 宿主应用与 Root Runtime 启动链路
 - 运行时文件打包、资源目录准备与 GitHub 资源更新
@@ -66,7 +66,7 @@
 
 - 不要提交 `local.properties`、签名文件、私有 token、用户日志、截图或诊断包。
 - 发布前至少执行一次敏感信息扫描与一次 `assembleRelease` 验证。
-- 若需要 GitHub Release，推荐使用 `v1.0.0` 形式的 tag，与 `versionName` 保持一致。
+- 若需要 GitHub Release，推荐使用 `v1.0.1` 形式的 tag，与 `versionName` 保持一致。
 
 ## 开发说明
 
