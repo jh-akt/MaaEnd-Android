@@ -10,7 +10,6 @@ plugins {
 }
 
 val runtimeDir = rootProject.layout.projectDirectory.dir("runtime")
-val maaendRepoDir = rootProject.layout.projectDirectory.dir("../MaaEnd")
 val generatedAssetsDir = layout.buildDirectory.dir("generated/assets")
 val generatedJniLibsDir = layout.buildDirectory.dir("generated/jniLibs")
 val signingPropertiesFile = rootProject.file("key.properties")
@@ -22,12 +21,6 @@ val signingProperties = Properties().apply {
 
 val prepareBundledRuntimeAssets by tasks.registering(Sync::class) {
     from(runtimeDir)
-    from(maaendRepoDir.dir("assets/resource/pipeline/Common/__Private")) {
-        into("private_pipeline/resource/CommonPrivate")
-    }
-    from(maaendRepoDir.dir("assets/resource_adb/pipeline/Common/__Private")) {
-        into("private_pipeline/resource_adb/CommonPrivate")
-    }
     into(generatedAssetsDir.map { it.dir("bundled_runtime") })
     includeEmptyDirs = true
 }
@@ -69,7 +62,10 @@ android {
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".debug"
             isMinifyEnabled = false
+            versionNameSuffix = "-debug"
+            resValue("string", "app_name", "MaaEnd Debug")
         }
         release {
             isMinifyEnabled = false
@@ -96,7 +92,6 @@ android {
 
     sourceSets.getByName("main").assets.srcDirs(
         "src/main/assets",
-        maaendRepoDir.dir("assets"),
         generatedAssetsDir,
     )
     sourceSets.getByName("main").jniLibs.srcDirs(generatedJniLibsDir)

@@ -3,7 +3,13 @@ local.properties
 key.properties
 *.jks
 *.keystore
+.DS_Store
+.cache/
+build/
+tmp/
+tools/go-runner/android-go-runner
 app/build/
+app/.cxx/
 runtime/agent/go-service
 runtime/maafw/
 runtime/runtime-manifest.json

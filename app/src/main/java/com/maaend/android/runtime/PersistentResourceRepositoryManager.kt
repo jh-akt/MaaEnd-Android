@@ -17,13 +17,18 @@ import kotlinx.serialization.json.jsonPrimitive
 @Serializable
 data class PersistentResourceRepositoryStatus(
     val available: Boolean = false,
-    val source: String = "assets",
+    val source: String = "github",
     val branch: String = MaaEndRemoteConfig.BRANCH,
     val mainRevision: String? = null,
     val modelRevision: String? = null,
     val updatedAt: Long = 0L,
     val rootPath: String? = null,
     val lastError: String? = null,
+)
+
+data class PersistentResourceRepositorySyncProgress(
+    val fraction: Float = 0f,
+    val label: String = "",
 )
 
 private object MaaEndRemoteConfig {
@@ -48,10 +53,11 @@ object PersistentResourceRepositoryManager {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     fun currentRoot(context: Context): File {
-        return File(context.filesDir, "maaend-resource/current")
+        return File(sharedBaseDir(context), "current")
     }
 
     fun loadStatus(context: Context): PersistentResourceRepositoryStatus {
+        migrateLegacyInternalRepositoryIfNeeded(context)
         val root = currentRoot(context)
         val meta = readMetadata(root)
         val ready = isRepositoryReady(root)
@@ -68,43 +74,67 @@ object PersistentResourceRepositoryManager {
         } else {
             PersistentResourceRepositoryStatus(
                 available = false,
-                source = "assets",
+                source = meta?.source ?: "github",
                 branch = meta?.branch ?: MaaEndRemoteConfig.BRANCH,
+                rootPath = root.absolutePath,
                 lastError = meta?.lastError,
             )
         }
     }
 
+    fun requireCurrentRoot(context: Context): File {
+        val status = loadStatus(context)
+        check(status.available) {
+            status.lastError?.let { "MaaEnd 资源仓库不可用：$it" }
+                ?: "MaaEnd 资源仓库未就绪，请先在设置中同步 GitHub 资源"
+        }
+        return currentRoot(context)
+    }
+
     fun ensureAvailable(
         context: Context,
         logger: ((String) -> Unit)? = null,
+        progress: ((PersistentResourceRepositorySyncProgress) -> Unit)? = null,
     ): PersistentResourceRepositoryStatus {
         val existing = loadStatus(context)
         if (existing.available) {
             return existing
         }
-        return updateFromGithub(context, logger)
+        return updateFromGithub(context, logger, progress)
+    }
+
+    fun clearLocalCache(context: Context): PersistentResourceRepositoryStatus {
+        clearRepositoryStorage(
+            sharedBaseDir = sharedBaseDir(context),
+            legacyInternalBaseDir = legacyInternalBaseDir(context),
+        )
+        return loadStatus(context)
     }
 
     fun updateFromGithub(
         context: Context,
         logger: ((String) -> Unit)? = null,
+        progress: ((PersistentResourceRepositorySyncProgress) -> Unit)? = null,
     ): PersistentResourceRepositoryStatus {
-        val baseDir = File(context.filesDir, "maaend-resource").apply { mkdirs() }
+        val baseDir = sharedBaseDir(context).apply { mkdirs() }
         val currentRoot = currentRoot(context)
         val stagingRoot = File(baseDir, "staging-${System.currentTimeMillis()}").apply { mkdirs() }
         val previousRoot = File(baseDir, "previous")
 
         return runCatching {
+            reportProgress(progress, 0.04f, "准备同步 GitHub 资源")
             logger?.invoke("Downloading MaaEnd resource repository from GitHub")
+            reportProgress(progress, 0.12f, "正在解析 MaaEnd-AI 版本")
             val modelSubmodule = fetchModelSubmodule(logger)
-            downloadAndExtractMainRepository(stagingRoot, logger)
+            downloadAndExtractMainRepository(stagingRoot, logger, progress)
             downloadAndExtractModelRepository(
                 targetRoot = File(stagingRoot, "resource/model"),
                 submodule = modelSubmodule,
                 logger = logger,
+                progress = progress,
             )
 
+            reportProgress(progress, 0.90f, "正在写入本地缓存")
             val status = PersistentResourceRepositoryStatus(
                 available = true,
                 source = "github",
@@ -128,28 +158,84 @@ object PersistentResourceRepositoryManager {
             }
             deleteRecursively(previousRoot)
 
+            reportProgress(progress, 1f, "GitHub 资源同步完成")
             logger?.invoke("Persistent GitHub resource repository updated")
             loadStatus(context)
         }.getOrElse { error ->
-            logger?.invoke("GitHub resource repository update failed: ${error.message}")
+            val message = error.message ?: error::class.java.simpleName
+            logger?.invoke("GitHub resource repository update failed: $message")
             deleteRecursively(stagingRoot)
             val existing = loadStatus(context)
             existing.copy(
-                lastError = error.message ?: error::class.java.simpleName,
+                lastError = message,
             )
+        }
+    }
+
+    private fun sharedBaseDir(context: Context): File {
+        val externalRoot = resolveExternalFilesRoot(context.packageName) {
+            context.getExternalFilesDir(null)
+        }
+        return File(externalRoot, "maaend-resource")
+    }
+
+    internal fun resolveExternalFilesRoot(
+        packageName: String,
+        externalFilesDirProvider: () -> File?,
+    ): File {
+        return runCatching { externalFilesDirProvider() }.getOrNull()
+            ?: File("/sdcard/Android/data/$packageName/files")
+    }
+
+    private fun legacyInternalCurrentRoot(context: Context): File {
+        return File(legacyInternalBaseDir(context), "current")
+    }
+
+    private fun legacyInternalBaseDir(context: Context): File {
+        return File(context.filesDir, "maaend-resource")
+    }
+
+    private fun migrateLegacyInternalRepositoryIfNeeded(context: Context) {
+        val targetRoot = currentRoot(context)
+        if (isRepositoryReady(targetRoot)) {
+            return
+        }
+
+        val legacyRoot = legacyInternalCurrentRoot(context)
+        if (!isRepositoryReady(legacyRoot)) {
+            return
+        }
+
+        runCatching {
+            val targetBaseDir = sharedBaseDir(context).apply { mkdirs() }
+            val stagingRoot = File(targetBaseDir, "migration-${System.currentTimeMillis()}").apply { mkdirs() }
+            copyDirectoryContents(legacyRoot, stagingRoot)
+            if (targetRoot.exists()) {
+                deleteRecursively(targetRoot)
+            }
+            if (!stagingRoot.renameTo(targetRoot)) {
+                copyDirectoryContents(stagingRoot, targetRoot)
+                deleteRecursively(stagingRoot)
+            }
         }
     }
 
     private fun downloadAndExtractMainRepository(
         targetRoot: File,
         logger: ((String) -> Unit)?,
+        progress: ((PersistentResourceRepositorySyncProgress) -> Unit)?,
     ) {
+        reportProgress(progress, 0.18f, "正在下载 MaaEnd 主资源")
         val zipFile = downloadToTempFile(
             url = MaaEndRemoteConfig.repoZipUrl(MaaEndRemoteConfig.BRANCH),
             prefix = "maaend-main",
             logger = logger,
+            onProgress = { fraction ->
+                reportProgress(progress, 0.18f + (fraction * 0.24f), "正在下载 MaaEnd 主资源")
+            },
         )
         try {
+            reportProgress(progress, 0.45f, "正在解压 MaaEnd 主资源")
             extractZip(zipFile, targetRoot) { entryName ->
                 val marker = "/assets/"
                 val index = entryName.indexOf(marker)
@@ -168,13 +254,19 @@ object PersistentResourceRepositoryManager {
         targetRoot: File,
         submodule: GitSubmoduleInfo,
         logger: ((String) -> Unit)?,
+        progress: ((PersistentResourceRepositorySyncProgress) -> Unit)?,
     ) {
+        reportProgress(progress, 0.58f, "正在下载 MaaEnd-AI 资源")
         val zipFile = downloadToTempFile(
             url = MaaEndRemoteConfig.repoApiUrl(submodule.owner, submodule.repo, submodule.revision),
             prefix = "maaend-model",
             logger = logger,
+            onProgress = { fraction ->
+                reportProgress(progress, 0.58f + (fraction * 0.18f), "正在下载 MaaEnd-AI 资源")
+            },
         )
         try {
+            reportProgress(progress, 0.79f, "正在解压 MaaEnd-AI 资源")
             extractZip(zipFile, targetRoot) { entryName ->
                 entryName.substringAfter('/', "").takeIf { it.isNotBlank() }
             }
@@ -200,16 +292,44 @@ object PersistentResourceRepositoryManager {
         url: String,
         prefix: String,
         logger: ((String) -> Unit)?,
+        onProgress: ((Float) -> Unit)? = null,
     ): File {
         logger?.invoke("Downloading $url")
         val tempFile = File.createTempFile(prefix, ".zip")
         val connection = openConnection(url)
+        val totalBytes = connection.contentLengthLong.takeIf { it > 0L }
         connection.inputStream.use { input ->
             FileOutputStream(tempFile).use { output ->
-                input.copyTo(output)
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var downloadedBytes = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) {
+                        break
+                    }
+                    output.write(buffer, 0, read)
+                    downloadedBytes += read
+                    totalBytes?.let { total ->
+                        onProgress?.invoke((downloadedBytes.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                    }
+                }
             }
         }
+        onProgress?.invoke(1f)
         return tempFile
+    }
+
+    private fun reportProgress(
+        progress: ((PersistentResourceRepositorySyncProgress) -> Unit)?,
+        fraction: Float,
+        label: String,
+    ) {
+        progress?.invoke(
+            PersistentResourceRepositorySyncProgress(
+                fraction = fraction.coerceIn(0f, 1f),
+                label = label,
+            ),
+        )
     }
 
     private fun openConnection(url: String): HttpURLConnection {
@@ -303,6 +423,14 @@ object PersistentResourceRepositoryManager {
         }
     }
 
+    internal fun clearRepositoryStorage(
+        sharedBaseDir: File,
+        legacyInternalBaseDir: File? = null,
+    ) {
+        deleteRecursively(sharedBaseDir)
+        legacyInternalBaseDir?.let(::deleteRecursively)
+    }
+
     private fun deleteRecursively(file: File) {
         if (!file.exists()) {
             return
@@ -310,7 +438,9 @@ object PersistentResourceRepositoryManager {
         if (file.isDirectory) {
             file.listFiles()?.forEach(::deleteRecursively)
         }
-        file.delete()
+        check(file.delete() || !file.exists()) {
+            "Failed to delete ${file.absolutePath}"
+        }
     }
 }
 

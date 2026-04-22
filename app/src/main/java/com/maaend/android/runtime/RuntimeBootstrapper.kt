@@ -37,7 +37,7 @@ object RuntimeBootstrapper {
         runtimeRoot: File = defaultRuntimeRoot(context),
     ): RuntimePrepareResult {
         val assets = context.assets
-        val persistentRepoStatus = PersistentResourceRepositoryManager.ensureAvailable(context, logger::log)
+        val persistentRepoStatus = resolveResourceRepositoryStatus(context, logger)
 
         runtimeRoot.mkdirs()
         File(runtimeRoot, "logs").mkdirs()
@@ -51,17 +51,24 @@ object RuntimeBootstrapper {
                 copyFileEntry(File(repoRoot, entry), File(runtimeRoot, entry), logger)
             }
             logger.log("Runtime resources prepared from persistent GitHub repository")
-        } else {
+        } else if (hasBundledBaseAssets(assets)) {
+            logger.log("Persistent GitHub repository unavailable, using bundled fallback assets")
             collectRequiredAssetEntries(assets).forEach { entry ->
                 copyAssetEntry(assets, entry, File(runtimeRoot, entry), logger)
             }
             logger.log("Runtime resources prepared from bundled assets")
+        } else {
+            val detail = persistentRepoStatus.lastError?.takeIf { it.isNotBlank() }
+                ?: "resource repository not synced yet"
+            error(
+                "GitHub resource repository unavailable and APK does not bundle fallback assets: $detail. " +
+                    "Sync MaaEnd resources before preparing runtime.",
+            )
         }
 
         if (assetEntryExists(assets, "bundled_runtime")) {
             copyAssetEntry(assets, "bundled_runtime", runtimeRoot, logger)
         }
-        overlayBundledPrivatePipeline(runtimeRoot, logger)
 
         val goService = File(runtimeRoot, "agent/go-service")
         val maafwDir = File(runtimeRoot, "maafw")
@@ -90,6 +97,22 @@ object RuntimeBootstrapper {
         )
     }
 
+    private fun resolveResourceRepositoryStatus(
+        context: Context,
+        logger: RuntimeLogger,
+    ): PersistentResourceRepositoryStatus {
+        val existing = PersistentResourceRepositoryManager.loadStatus(context)
+        if (existing.available) {
+            return existing
+        }
+
+        logger.log("Persistent GitHub repository unavailable, syncing MaaEnd resources before prepare")
+        return PersistentResourceRepositoryManager.ensureAvailable(
+            context = context,
+            logger = logger::log,
+        )
+    }
+
     private fun collectRequiredAssetEntries(assets: AssetManager): List<String> {
         val entries = linkedSetOf<String>()
         entries += BASE_ASSET_ENTRIES
@@ -108,6 +131,10 @@ object RuntimeBootstrapper {
             collectAdditionalEntries(root).forEach { entries += it }
         }
         return entries.toList()
+    }
+
+    private fun hasBundledBaseAssets(assets: AssetManager): Boolean {
+        return assetEntryExists(assets, "interface.json")
     }
 
     private fun assetEntryExists(assets: AssetManager, path: String): Boolean {
@@ -239,48 +266,6 @@ object RuntimeBootstrapper {
         }
         deleteRecursively(File(runtimeRoot, "maafw/plugins.disabled"))
         logger.log("Cleared stale runtime payload before prepare")
-    }
-
-    private fun overlayBundledPrivatePipeline(runtimeRoot: File, logger: RuntimeLogger) {
-        val overlayRoot = File(runtimeRoot, "private_pipeline")
-        if (!overlayRoot.exists()) {
-            return
-        }
-
-        val resourcePrivateRoot = File(overlayRoot, "resource/CommonPrivate")
-        if (resourcePrivateRoot.exists()) {
-            copyDirectoryContents(
-                sourceRoot = resourcePrivateRoot,
-                targetRoot = File(runtimeRoot, "resource/pipeline/Common/__Private"),
-            )
-            logger.log("Overlayed private_pipeline into resource/pipeline/Common/__Private")
-        }
-
-        val resourceAdbPrivateRoot = File(overlayRoot, "resource_adb/CommonPrivate")
-        if (resourceAdbPrivateRoot.exists()) {
-            copyDirectoryContents(
-                sourceRoot = resourceAdbPrivateRoot,
-                targetRoot = File(runtimeRoot, "resource_adb/pipeline/Common/__Private"),
-            )
-            logger.log("Overlayed private_pipeline into resource_adb/pipeline/Common/__Private")
-        }
-    }
-
-    private fun copyDirectoryContents(sourceRoot: File, targetRoot: File) {
-        sourceRoot.walkTopDown().forEach { file ->
-            val relative = file.relativeTo(sourceRoot)
-            val target = File(targetRoot, relative.path)
-            if (file.isDirectory) {
-                target.mkdirs()
-            } else {
-                target.parentFile?.mkdirs()
-                file.inputStream().use { input ->
-                    target.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
-        }
     }
 
     private fun stopStaleAgentProcesses(runtimeRoot: File, logger: RuntimeLogger) {

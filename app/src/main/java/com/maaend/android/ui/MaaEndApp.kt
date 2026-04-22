@@ -71,6 +71,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -113,6 +114,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -124,11 +126,15 @@ import com.maaend.android.model.TaskDescriptor
 import com.maaend.android.model.TaskOptionDescriptor
 import com.maaend.android.model.TaskOptionType
 import com.maaend.android.preview.DefaultDisplayConfig
+import com.maaend.android.runtime.PersistentResourceRepositoryManager
+import com.maaend.android.runtime.PersistentResourceRepositorySyncProgress
 import com.maaend.android.runtime.PersistentResourceRepositoryStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.DateFormat
 import java.util.Date
+import kotlin.math.roundToInt
 
 @Composable
 fun MaaEndApp(viewModel: MainViewModel) {
@@ -279,6 +285,12 @@ fun MaaEndApp(viewModel: MainViewModel) {
                     viewModel = viewModel,
                     previewContent = previewContent,
                     onDismissRequest = { isFullscreenPreview = false },
+                )
+            }
+            if (state.resourceRepositoryClearConfirmVisible) {
+                ResourceRepositoryClearConfirmationDialog(
+                    onDismissRequest = viewModel::dismissClearResourceRepositoryConfirmation,
+                    onConfirm = viewModel::clearResourceRepository,
                 )
             }
         }
@@ -529,6 +541,7 @@ private fun HomeScreen(
                 selectedResource = selectedResource,
                 resourceRepository = state.resourceRepository,
                 resourceRepositoryUpdating = state.resourceRepositoryUpdating,
+                resourceRepositoryProgress = state.resourceRepositoryProgress,
                 globalOptions = visibleGlobalOptions,
                 globalSelections = state.sharedOptionSelectionsByScope[globalScopeId].orEmpty(),
                 globalInputs = state.sharedInputValuesByScope[globalScopeId].orEmpty(),
@@ -539,11 +552,12 @@ private fun HomeScreen(
                 resourceInputErrors = resourceInputErrors,
                 onSelectResource = onSelectResource,
                 onSwitchSharedOption = onSwitchSharedOption,
-                onToggleSharedCheckboxOption = onToggleSharedCheckboxOption,
-                onSharedInputValueChange = onSharedInputValueChange,
-                onRefreshResourceRepository = viewModel::refreshResourceRepository,
-                hideDescriptions = true,
-            )
+                                onToggleSharedCheckboxOption = onToggleSharedCheckboxOption,
+                                onSharedInputValueChange = onSharedInputValueChange,
+                                onRefreshResourceRepository = viewModel::refreshResourceRepository,
+                                onClearResourceRepository = viewModel::requestClearResourceRepositoryConfirmation,
+                                hideDescriptions = true,
+                            )
         }
     }
 }
@@ -926,6 +940,7 @@ private fun ResourceConfigPanel(
     selectedResource: com.maaend.android.model.ResourceDescriptor?,
     resourceRepository: PersistentResourceRepositoryStatus,
     resourceRepositoryUpdating: Boolean,
+    resourceRepositoryProgress: PersistentResourceRepositorySyncProgress?,
     globalOptions: List<TaskOptionDescriptor>,
     globalSelections: Map<String, Set<String>>,
     globalInputs: Map<String, Map<String, String>>,
@@ -939,6 +954,7 @@ private fun ResourceConfigPanel(
     onToggleSharedCheckboxOption: (String, String, String) -> Unit,
     onSharedInputValueChange: (String, String, String, String) -> Unit,
     onRefreshResourceRepository: () -> Unit,
+    onClearResourceRepository: () -> Unit,
     hideDescriptions: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -970,14 +986,30 @@ private fun ResourceConfigPanel(
             description = if (hideDescriptions) {
                 null
             } else if (resourceRepositoryUpdating) {
-                "正在同步 MaaEnd 与 MaaEnd-AI 资源"
+                "正在处理 GitHub 资源缓存"
             } else {
                 "首次下载后会缓存在本地，后续按需手动刷新。"
             },
-            actionLabel = if (resourceRepositoryUpdating) "更新中" else "执行",
+            actionLabel = if (resourceRepositoryUpdating) "处理中" else "执行",
             enabled = !resourceRepositoryUpdating,
             onClick = onRefreshResourceRepository,
         )
+        SettingsDivider()
+        SettingsActionRow(
+            title = "清空 GitHub 资源",
+            description = if (hideDescriptions) {
+                null
+            } else {
+                "删除当前缓存和历史目录，下次更新会重新下载，适合排除旧数据干扰。"
+            },
+            actionLabel = if (resourceRepositoryUpdating) "处理中" else "清空",
+            enabled = !resourceRepositoryUpdating,
+            onClick = onClearResourceRepository,
+        )
+        if (resourceRepositoryUpdating && resourceRepositoryProgress != null) {
+            SettingsDivider()
+            ResourceRepositoryProgressBlock(progress = resourceRepositoryProgress)
+        }
 
         if (resources.isNotEmpty()) {
             SettingsDivider()
@@ -1752,15 +1784,27 @@ private fun SettingsScreen(
                 SettingsActionRow(
                     title = if (state.resourceRepository.available) "更新 GitHub 资源" else "下载 GitHub 资源",
                     description = if (state.resourceRepositoryUpdating) {
-                        "正在同步 MaaEnd 与 MaaEnd-AI 资源"
+                        "正在处理 GitHub 资源缓存"
                     } else {
                         "首次下载后会缓存在本地，之后可以手动刷新"
                     },
-                    actionLabel = if (state.resourceRepositoryUpdating) "更新中" else "执行",
+                    actionLabel = if (state.resourceRepositoryUpdating) "处理中" else "执行",
                     enabled = !state.resourceRepositoryUpdating,
                     onClick = viewModel::refreshResourceRepository,
                 )
-                if (state.lastMessage.isNotBlank()) {
+                SettingsDivider()
+                SettingsActionRow(
+                    title = "清空 GitHub 资源",
+                    description = "删除当前缓存和历史目录，下次更新会重新下载，适合排除旧数据干扰",
+                    actionLabel = if (state.resourceRepositoryUpdating) "处理中" else "清空",
+                    enabled = !state.resourceRepositoryUpdating,
+                    onClick = viewModel::requestClearResourceRepositoryConfirmation,
+                )
+                if (state.resourceRepositoryUpdating && state.resourceRepositoryProgress != null) {
+                    SettingsDivider()
+                    ResourceRepositoryProgressBlock(progress = state.resourceRepositoryProgress)
+                }
+                if (!state.resourceRepositoryUpdating && state.lastMessage.isNotBlank()) {
                     SettingsDivider()
                     SettingsSupportText(
                         text = state.lastMessage,
@@ -1833,6 +1877,152 @@ private fun SettingsScreen(
                     actionLabel = "打开",
                     onClick = { uriHandler.openUri("https://github.com/MaaEnd/MaaEnd-Android") },
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResourceRepositoryProgressBlock(
+    progress: PersistentResourceRepositorySyncProgress,
+) {
+    val percentText = "${(progress.fraction * 100).roundToInt().coerceIn(0, 100)}%"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = progress.label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = percentText,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        LinearProgressIndicator(
+            progress = { progress.fraction },
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(percent = 50)),
+        )
+    }
+}
+
+@Composable
+private fun ResourceRepositoryClearConfirmationDialog(
+    onDismissRequest: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismissRequest) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = MaaEndDesignTokens.Spacing.lg)
+                .widthIn(max = 420.dp),
+            shape = RoundedCornerShape(MaaEndDesignTokens.CornerRadius.card),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+            ),
+            border = BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.82f),
+            ),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(MaaEndDesignTokens.Spacing.lg),
+                verticalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.md),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(MaaEndDesignTokens.CornerRadius.pill),
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.10f),
+                ) {
+                    Text(
+                        text = "缓存重置",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
+                }
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.xs),
+                ) {
+                    Text(
+                        text = "清空 GitHub 资源",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "会删除当前缓存的 GitHub 资源和历史目录，下次更新会重新下载。任务配置不会被清空。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(MaaEndDesignTokens.CornerRadius.inner),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+                ) {
+                    Text(
+                        text = "适合在资源切换、缓存残留或历史数据干扰时使用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(
+                            horizontal = MaaEndDesignTokens.Spacing.md,
+                            vertical = MaaEndDesignTokens.Spacing.sm,
+                        ),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.sm),
+                ) {
+                    OutlinedButton(
+                        onClick = onDismissRequest,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(MaaEndDesignTokens.CornerRadius.inner),
+                    ) {
+                        Text(
+                            text = "取消",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Button(
+                        onClick = onConfirm,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(MaaEndDesignTokens.CornerRadius.inner),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        ),
+                    ) {
+                        Text(
+                            text = "确认清空",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
             }
         }
     }
@@ -2808,8 +2998,8 @@ private fun resourceRepositorySummary(status: PersistentResourceRepositoryStatus
                 append(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(status.updatedAt)))
             }
         }
-        status.lastError.isNullOrBlank() -> "尚未下载，当前会回退到 APK 内置资源"
-        else -> "GitHub 更新失败，当前回退到 APK 内置资源"
+        status.lastError.isNullOrBlank() -> "尚未下载，首次启动会同步 MaaEnd 资源"
+        else -> "GitHub 更新失败，请重新同步 MaaEnd 资源"
     }
 }
 
@@ -2995,7 +3185,9 @@ private fun AssetIcon(
     val context = LocalContext.current
     val bitmap = remember(assetPath) {
         runCatching {
-            context.assets.open(assetPath).use(BitmapFactory::decodeStream)?.asImageBitmap()
+            loadCatalogAssetBytes(context, assetPath)?.inputStream()
+                ?.use(BitmapFactory::decodeStream)
+                ?.asImageBitmap()
         }.getOrNull()
     }
     if (bitmap != null) {
@@ -3096,9 +3288,28 @@ private fun loadRichTextContent(context: Context, rawText: String): String {
     if (!looksLikeAssetPath) {
         return trimmed
     }
+    return loadCatalogAssetBytes(context, trimmed)
+        ?.toString(Charsets.UTF_8)
+        ?: trimmed
+}
+
+private fun loadCatalogAssetBytes(context: Context, rawPath: String): ByteArray? {
+    val normalizedPath = rawPath.trim().removePrefix("./").trimStart('/')
+    if (normalizedPath.isBlank()) {
+        return null
+    }
+
+    val repoRoot = PersistentResourceRepositoryManager.loadStatus(context).rootPath
+    if (!repoRoot.isNullOrBlank()) {
+        val repoFile = File(repoRoot, normalizedPath)
+        if (repoFile.isFile) {
+            return runCatching { repoFile.readBytes() }.getOrNull()
+        }
+    }
+
     return runCatching {
-        context.assets.open(trimmed).bufferedReader(Charsets.UTF_8).use { it.readText() }
-    }.getOrDefault(trimmed)
+        context.assets.open(normalizedPath).use { it.readBytes() }
+    }.getOrNull()
 }
 
 private fun compactTaskLabel(task: TaskDescriptor): String {

@@ -21,6 +21,7 @@ import com.maaend.android.model.TaskSequenceSupport
 import com.maaend.android.root.RootManager
 import com.maaend.android.root.RootRuntimeConnector
 import com.maaend.android.runtime.PersistentResourceRepositoryManager
+import com.maaend.android.runtime.PersistentResourceRepositorySyncProgress
 import com.maaend.android.runtime.PersistentResourceRepositoryStatus
 import com.maaend.android.storage.AppSettings
 import com.maaend.android.storage.AppSettingsRepository
@@ -30,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -72,6 +74,8 @@ data class MainUiState(
     val sharedInputValuesByScope: Map<String, Map<String, Map<String, String>>> = emptyMap(),
     val resourceRepository: PersistentResourceRepositoryStatus = PersistentResourceRepositoryStatus(),
     val resourceRepositoryUpdating: Boolean = false,
+    val resourceRepositoryProgress: PersistentResourceRepositorySyncProgress? = null,
+    val resourceRepositoryClearConfirmVisible: Boolean = false,
     val displayLogs: List<String> = emptyList(),
     val lastMessage: String = "",
     val busy: Boolean = false,
@@ -124,6 +128,9 @@ class MainViewModel(
                 lastMessage = "接口资源缺失或格式异常：${error.message ?: error::class.java.simpleName}"
                 CatalogSnapshot()
             }
+        if (!resourceRepository.available && catalog.tasks.isEmpty() && lastMessage == "Root 运行环境已就绪") {
+            lastMessage = "首次启动需要同步 MaaEnd 资源，正在后台下载"
+        }
         val rootAvailable = runCatching { RootManager.isAvailable() }
             .getOrElse { error ->
                 Log.e(TAG, "Failed to detect root availability", error)
@@ -268,6 +275,23 @@ class MainViewModel(
         }
     }
 
+    fun requestClearResourceRepositoryConfirmation() {
+        if (_uiState.value.resourceRepositoryUpdating) {
+            return
+        }
+        _uiState.value = _uiState.value.copy(resourceRepositoryClearConfirmVisible = true)
+    }
+
+    fun dismissClearResourceRepositoryConfirmation() {
+        _uiState.value = _uiState.value.copy(resourceRepositoryClearConfirmVisible = false)
+    }
+
+    fun clearResourceRepository() {
+        viewModelScope.launch {
+            clearPersistentResourceRepository()
+        }
+    }
+
     fun startSelectedTask() {
         val requestedTasks = checkedTasksInOrder().ifEmpty {
             selectedTask()?.let(::listOf).orEmpty()
@@ -311,21 +335,30 @@ class MainViewModel(
         if (_uiState.value.resourceRepositoryUpdating) {
             return
         }
+        _uiState.value = _uiState.value.copy(resourceRepositoryClearConfirmVisible = false)
         _uiState.value = _uiState.value.copy(
             resourceRepositoryUpdating = true,
+            resourceRepositoryProgress = PersistentResourceRepositorySyncProgress(
+                fraction = 0f,
+                label = "准备同步 GitHub 资源",
+            ),
             lastMessage = if (silent) _uiState.value.lastMessage else "正在同步 GitHub 资源仓库",
         )
         val application = getApplication<Application>()
         val status = runCatching {
             withContext(Dispatchers.IO) {
                 if (force) {
-                    PersistentResourceRepositoryManager.updateFromGithub(application) { message ->
-                        Log.i(TAG, message)
-                    }
+                    PersistentResourceRepositoryManager.updateFromGithub(
+                        context = application,
+                        logger = { message -> Log.i(TAG, message) },
+                        progress = ::updateResourceRepositoryProgress,
+                    )
                 } else {
-                    PersistentResourceRepositoryManager.ensureAvailable(application) { message ->
-                        Log.i(TAG, message)
-                    }
+                    PersistentResourceRepositoryManager.ensureAvailable(
+                        context = application,
+                        logger = { message -> Log.i(TAG, message) },
+                        progress = ::updateResourceRepositoryProgress,
+                    )
                 }
             }
         }.getOrElse { error ->
@@ -337,25 +370,77 @@ class MainViewModel(
 
         val nextMessage = when {
             status.available && force -> "GitHub 资源已更新，下次准备运行时会使用新资源"
-            status.available && !silent -> "GitHub 资源仓库已就绪"
+            status.available && (!silent || _uiState.value.catalog.tasks.isEmpty()) -> "GitHub 资源仓库已就绪"
             status.available -> _uiState.value.lastMessage
-            else -> "GitHub 资源同步失败，继续使用内置资源：${status.lastError ?: "未知错误"}"
+            else -> "GitHub 资源同步失败：${status.lastError ?: "未知错误"}"
         }
         refreshCatalogSnapshot(status)
         _uiState.value = _uiState.value.copy(
             resourceRepository = status,
             resourceRepositoryUpdating = false,
+            resourceRepositoryProgress = null,
             lastMessage = nextMessage,
         )
+    }
+
+    private suspend fun clearPersistentResourceRepository() {
+        if (_uiState.value.resourceRepositoryUpdating) {
+            return
+        }
+        _uiState.value = _uiState.value.copy(
+            resourceRepositoryUpdating = true,
+            resourceRepositoryProgress = PersistentResourceRepositorySyncProgress(
+                fraction = 0f,
+                label = "正在清空 GitHub 资源缓存",
+            ),
+            resourceRepositoryClearConfirmVisible = false,
+            lastMessage = "正在清空 GitHub 资源缓存",
+        )
+        val application = getApplication<Application>()
+        val status = runCatching {
+            withContext(Dispatchers.IO) {
+                PersistentResourceRepositoryManager.clearLocalCache(application)
+            }
+        }.getOrElse { error ->
+            Log.e(TAG, "Failed to clear GitHub resource repository cache", error)
+            PersistentResourceRepositoryManager.loadStatus(application).copy(
+                lastError = error.message ?: error::class.java.simpleName,
+            )
+        }
+
+        val nextMessage = if (status.lastError.isNullOrBlank()) {
+            "GitHub 资源缓存已清空，后续更新会重新下载"
+        } else {
+            "清空 GitHub 资源失败：${status.lastError}"
+        }
+        refreshCatalogSnapshot(status)
+        _uiState.value = _uiState.value.copy(
+            resourceRepository = status,
+            resourceRepositoryUpdating = false,
+            resourceRepositoryProgress = null,
+            lastMessage = nextMessage,
+        )
+    }
+
+    private fun updateResourceRepositoryProgress(progress: PersistentResourceRepositorySyncProgress) {
+        _uiState.update { state ->
+            state.copy(resourceRepositoryProgress = progress)
+        }
     }
 
     private fun loadCatalogSnapshot(resourceRepository: PersistentResourceRepositoryStatus): CatalogSnapshot {
         val application = getApplication<Application>()
         return if (resourceRepository.available) {
             catalogLoader.loadFromDirectory(PersistentResourceRepositoryManager.currentRoot(application))
-        } else {
+        } else if (hasBundledCatalogAssets(application)) {
             catalogLoader.load()
+        } else {
+            CatalogSnapshot()
         }
+    }
+
+    private fun hasBundledCatalogAssets(application: Application): Boolean {
+        return runCatching { application.assets.open("interface.json").close() }.isSuccess
     }
 
     private fun refreshCatalogSnapshot(resourceRepository: PersistentResourceRepositoryStatus) {

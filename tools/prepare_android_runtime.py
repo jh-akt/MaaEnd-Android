@@ -9,7 +9,6 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_MAAEND_ROOT = PROJECT_ROOT.parent / "MaaEnd"
 ANDROID_RUNTIME_DIR = PROJECT_ROOT / "runtime"
 RUNNER_SOURCE_DIR = PROJECT_ROOT / "tools" / "go-runner"
 
@@ -87,28 +86,43 @@ def stage_maafw(source_dir: Path, output_dir: Path) -> Path:
     return output_dir
 
 
+def resolve_go_service_dir(
+    go_service_dir: Path | None,
+    maaend_root: Path | None,
+) -> Path | None:
+    if go_service_dir is not None:
+        return go_service_dir
+    if maaend_root is None:
+        return None
+    return maaend_root / "agent" / "go-service"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Stage MaaEnd Android runtime artifacts")
     parser.add_argument(
         "--maaend-root",
         type=Path,
-        default=DEFAULT_MAAEND_ROOT,
-        help="Path to the MaaEnd repository to reuse assets and agent/go-service from",
+        help="Optional path to a MaaEnd checkout. Only used when explicitly passed.",
+    )
+    parser.add_argument(
+        "--go-service-dir",
+        type=Path,
+        help="Optional path to the go-service source directory. Overrides --maaend-root.",
     )
     parser.add_argument("--go-exe", default="go", help="Go executable path")
     parser.add_argument("--maafw-dir", type=Path, help="Vendored MaaFramework Android runtime directory")
     parser.add_argument("--output", type=Path, default=ANDROID_RUNTIME_DIR, help="Android runtime output directory")
-    parser.add_argument("--skip-go", action="store_true", help="Skip cross-compiling agent/go-service")
+    parser.add_argument("--skip-go", action="store_true", help="Skip cross-compiling go-service and maa-go-runner")
     parser.add_argument("--clear", action="store_true", help="Clear staged runtime directories before copying")
     args = parser.parse_args()
 
     output_dir: Path = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
-    maaend_root: Path = args.maaend_root
-    go_service_dir = maaend_root / "agent" / "go-service"
-
-    if not args.skip_go and not go_service_dir.exists():
-        raise FileNotFoundError(f"go-service source dir not found: {go_service_dir}")
+    maaend_root: Path | None = args.maaend_root.resolve() if args.maaend_root else None
+    go_service_dir = resolve_go_service_dir(
+        go_service_dir=args.go_service_dir.resolve() if args.go_service_dir else None,
+        maaend_root=maaend_root,
+    )
 
     if args.clear:
         for child in ("agent", "maafw"):
@@ -119,14 +133,29 @@ def main() -> int:
     manifest: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "output_dir": str(output_dir),
-        "maaend_root": str(maaend_root),
     }
+    if maaend_root is not None:
+        manifest["maaend_root"] = str(maaend_root)
+    if go_service_dir is not None:
+        manifest["go_service_source_dir"] = str(go_service_dir)
 
     if not args.skip_go:
-        go_binary = stage_go_service(args.go_exe, go_service_dir, output_dir / "agent")
-        manifest["go_service"] = str(go_binary)
         runner_binary = stage_runner(args.go_exe, RUNNER_SOURCE_DIR, output_dir / "agent")
         manifest["runner"] = str(runner_binary)
+        if go_service_dir is not None:
+            if not go_service_dir.exists():
+                raise FileNotFoundError(f"go-service source dir not found: {go_service_dir}")
+            go_binary = stage_go_service(args.go_exe, go_service_dir, output_dir / "agent")
+            manifest["go_service"] = str(go_binary)
+        else:
+            prebuilt_go_service = output_dir / "agent" / "go-service"
+            if not prebuilt_go_service.exists():
+                raise FileNotFoundError(
+                    "go-service source dir not provided. Pass --go-service-dir or --maaend-root, "
+                    "or use --skip-go after staging runtime/agent/go-service yourself.",
+                )
+            manifest["go_service"] = str(prebuilt_go_service)
+            manifest["go_service_source"] = "prebuilt"
 
     if args.maafw_dir:
         maafw_dir = stage_maafw(args.maafw_dir, output_dir / "maafw")

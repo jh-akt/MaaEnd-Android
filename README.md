@@ -21,7 +21,7 @@
 - Android 11 及以上
 - `arm64-v8a`
 - 已获取 Root 权限
-- 建议保留同级 `../MaaEnd` 仓库以复用资源与开发期资产
+- 默认构建与打包不会读取同级 `../MaaEnd` 仓库
 
 ## 快速开始
 
@@ -29,7 +29,7 @@
    - `runtime/agent/go-service`
    - `runtime/agent/maa-go-runner`
    - `runtime/maafw/`
-2. 如需完整资源与私有覆盖，确保同级存在 `../MaaEnd` 仓库。
+2. 首次启动应用时保持联网，应用会自动同步 `MaaEnd` GitHub 资源仓库。
 3. 构建 APK：
    - 调试包：`./gradlew assembleDebug`
    - 发布包：`./gradlew assembleRelease`
@@ -47,8 +47,9 @@
 打包时会组合以下来源：
 
 - 当前仓库 `runtime/` 下的 Android 可执行文件与 MaaFramework so
-- 同级 `../MaaEnd/assets` 中的资源
-- 构建阶段生成的 `private_pipeline` 覆盖内容
+- 构建阶段生成的 `bundled_runtime` 运行时目录
+
+`interface/tasks/resource` 与 `__Private` 辅助资源都不再内置到 APK，首次启动和运行前会从 `MaaEnd` GitHub 仓库同步到本地缓存。
 
 如果 `runtime/` 为空，应用仍可启动，但完整任务执行能力不会可用。
 
@@ -58,7 +59,7 @@
 
 需要特别注意：
 
-- 本仓库与同级 `../MaaEnd` 项目存在紧密的资源与运行时耦合，协议与上游保持一致，避免出现 Android 宿主更宽松、上游资源与派生运行时更严格的错配。
+- 本仓库与 MaaEnd 上游资源协议保持一致；如果你显式复用上游源码、运行时或同步资源，仍需分别遵守对应组件的许可证与归属说明。
 - 构建或发布 APK 时，如果你一并分发了运行时二进制、资源、模型或其他第三方组件，还需要分别遵守这些组件各自的许可证与归属说明。
 - 本仓库不会覆盖或改变 MaaFramework、模型资源以及其他第三方依赖原有的许可证。
 
