@@ -127,14 +127,26 @@ import com.maaframework.android.model.TaskOptionType
 import com.maaframework.android.preview.DefaultDisplayConfig
 import com.maaframework.android.ui.MaaFullscreenPreviewOverlay as FrameworkFullscreenPreviewOverlay
 import com.maaframework.android.ui.MaaHomeAction as FrameworkHomeAction
+import com.maaframework.android.ui.MaaHomeActionRow as FrameworkHomeActionRow
+import com.maaframework.android.ui.MaaHomeDivider
 import com.maaframework.android.ui.MaaHomeInfo as FrameworkHomeInfo
+import com.maaframework.android.ui.MaaHomeInfoRow as FrameworkHomeInfoRow
 import com.maaframework.android.ui.MaaHomePanel as FrameworkHomePanel
+import com.maaframework.android.ui.MaaHomeProgress as FrameworkHomeProgress
+import com.maaframework.android.ui.MaaHomeProgressBlock as FrameworkHomeProgressBlock
 import com.maaframework.android.ui.MaaHomeService as FrameworkHomeService
 import com.maaframework.android.ui.MaaHomeStatus as FrameworkHomeStatus
+import com.maaframework.android.ui.MaaHomeSupportText as FrameworkHomeSupportText
 import com.maaframework.android.ui.MaaHomeTone as FrameworkHomeTone
+import com.maaframework.android.ui.MaaLogMetric as FrameworkLogMetric
 import com.maaframework.android.ui.MaaPreviewPanel as FrameworkPreviewPanel
 import com.maaframework.android.ui.MaaPreviewSurfaceHost as FrameworkPreviewSurfaceHost
 import com.maaframework.android.ui.MaaRuntimeLogList as FrameworkRuntimeLogList
+import com.maaframework.android.ui.MaaRuntimeLogsPanel as FrameworkRuntimeLogsPanel
+import com.maaframework.android.ui.MaaSettingsChoice as FrameworkSettingsChoice
+import com.maaframework.android.ui.MaaSettingsChoiceRow as FrameworkSettingsChoiceRow
+import com.maaframework.android.ui.MaaSettingsPanel as FrameworkSettingsPanel
+import com.maaframework.android.ui.MaaSettingsSection as FrameworkSettingsSection
 import com.maaframework.android.ui.MaaTaskDetailPanel as FrameworkTaskDetailPanel
 import com.maaframework.android.ui.MaaTaskListPanel as FrameworkTaskListPanel
 import com.maaframework.android.ui.MaaTaskOptionsForm as FrameworkTaskOptionsForm
@@ -1733,34 +1745,29 @@ private fun SettingsScreen(
         context.contentResolver.openInputStream(uri)?.let(viewModel::importConfig)
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = MaaEndDesignTokens.Spacing.sm),
-        verticalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.sm),
-    ) {
-        item {
-            SettingsSectionHeader(title = "资源")
-            SettingsGroupCard {
-                SettingsInfoRow(
-                    label = "资源仓库",
-                    value = resourceRepositorySummary(state.resourceRepository),
+    FrameworkSettingsPanel {
+        FrameworkSettingsSection(title = "资源") {
+            FrameworkHomeInfoRow(
+                label = "资源仓库",
+                value = resourceRepositorySummary(state.resourceRepository),
+            )
+            state.resourceRepository.rootPath?.takeIf { it.isNotBlank() }?.let { rootPath ->
+                MaaHomeDivider()
+                FrameworkHomeSupportText(
+                    text = rootPath,
+                    tone = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                state.resourceRepository.rootPath?.takeIf { it.isNotBlank() }?.let { rootPath ->
-                    SettingsDivider()
-                    SettingsSupportText(
-                        text = rootPath,
-                        tone = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                state.resourceRepository.lastError?.takeIf { it.isNotBlank() }?.let { error ->
-                    SettingsDivider()
-                    SettingsSupportText(
-                        text = error,
-                        tone = MaterialTheme.colorScheme.error,
-                    )
-                }
-                SettingsDivider()
-                SettingsActionRow(
+            }
+            state.resourceRepository.lastError?.takeIf { it.isNotBlank() }?.let { error ->
+                MaaHomeDivider()
+                FrameworkHomeSupportText(
+                    text = error,
+                    tone = MaterialTheme.colorScheme.error,
+                )
+            }
+            MaaHomeDivider()
+            FrameworkHomeActionRow(
+                action = FrameworkHomeAction(
                     title = if (state.resourceRepository.available) "更新 GitHub 资源" else "下载 GitHub 资源",
                     description = if (state.resourceRepositoryUpdating) {
                         "正在处理 GitHub 资源缓存"
@@ -1770,93 +1777,97 @@ private fun SettingsScreen(
                     actionLabel = if (state.resourceRepositoryUpdating) "处理中" else "执行",
                     enabled = !state.resourceRepositoryUpdating,
                     onClick = viewModel::refreshResourceRepository,
-                )
-                SettingsDivider()
-                SettingsActionRow(
+                ),
+            )
+            MaaHomeDivider()
+            FrameworkHomeActionRow(
+                action = FrameworkHomeAction(
                     title = "清空 GitHub 资源",
                     description = "删除当前缓存和历史目录，下次更新会重新下载，适合排除旧数据干扰",
                     actionLabel = if (state.resourceRepositoryUpdating) "处理中" else "清空",
                     enabled = !state.resourceRepositoryUpdating,
                     onClick = viewModel::requestClearResourceRepositoryConfirmation,
-                )
-                if (state.resourceRepositoryUpdating && state.resourceRepositoryProgress != null) {
-                    SettingsDivider()
-                    ResourceRepositoryProgressBlock(progress = state.resourceRepositoryProgress)
-                }
-                if (!state.resourceRepositoryUpdating && state.lastMessage.isNotBlank()) {
-                    SettingsDivider()
-                    SettingsSupportText(
-                        text = state.lastMessage,
-                        tone = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        item {
-            SettingsSectionHeader(title = "日志")
-            SettingsGroupCard {
-                SettingsChoiceRow(
-                    title = "日志级别",
-                    description = "控制 root runtime 与日志页展示的详细程度",
-                    options = listOf(
-                        "error" to "错误",
-                        "warn" to "警告",
-                        "info" to "信息",
-                        "debug" to "调试",
+                ),
+            )
+            if (state.resourceRepositoryUpdating && state.resourceRepositoryProgress != null) {
+                MaaHomeDivider()
+                FrameworkHomeProgressBlock(
+                    progress = FrameworkHomeProgress(
+                        fraction = state.resourceRepositoryProgress.fraction,
+                        label = state.resourceRepositoryProgress.label,
                     ),
-                    selected = state.settings.logLevel,
-                    onSelected = viewModel::updateLogLevel,
+                )
+            }
+            if (!state.resourceRepositoryUpdating && state.lastMessage.isNotBlank()) {
+                MaaHomeDivider()
+                FrameworkHomeSupportText(
+                    text = state.lastMessage,
+                    tone = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
 
-        item {
-            SettingsSectionHeader(title = "数据")
-            SettingsGroupCard {
-                SettingsActionRow(
+        FrameworkSettingsSection(title = "日志") {
+            FrameworkSettingsChoiceRow(
+                title = "日志级别",
+                description = "控制 root runtime 与日志页展示的详细程度",
+                options = listOf(
+                    FrameworkSettingsChoice("error", "错误"),
+                    FrameworkSettingsChoice("warn", "警告"),
+                    FrameworkSettingsChoice("info", "信息"),
+                    FrameworkSettingsChoice("debug", "调试"),
+                ),
+                selected = state.settings.logLevel,
+                onSelected = viewModel::updateLogLevel,
+            )
+        }
+
+        FrameworkSettingsSection(title = "数据") {
+            FrameworkHomeActionRow(
+                action = FrameworkHomeAction(
                     title = "导出配置",
                     description = "导出任务勾选、资源选择和全部参数配置",
                     actionLabel = "导出",
                     onClick = { exportLauncher.launch("maaend_android_config.json") },
-                )
-                SettingsDivider()
-                SettingsActionRow(
+                ),
+            )
+            MaaHomeDivider()
+            FrameworkHomeActionRow(
+                action = FrameworkHomeAction(
                     title = "导入配置",
                     description = "导入后会覆盖当前本地配置并立即刷新界面",
                     actionLabel = "导入",
                     onClick = { importLauncher.launch(arrayOf("application/json")) },
-                )
-            }
+                ),
+            )
         }
 
-        item {
-            SettingsSectionHeader(title = "关于")
-            SettingsGroupCard {
-                SettingsInfoRow(
-                    label = "版本",
-                    value = BuildConfig.VERSION_NAME,
+        FrameworkSettingsSection(title = "关于") {
+            FrameworkHomeInfoRow(
+                label = "版本",
+                value = BuildConfig.VERSION_NAME,
+            )
+            MaaHomeDivider()
+            FrameworkHomeInfoRow(
+                label = "资源分支",
+                value = state.resourceRepository.branch,
+            )
+            state.resourceRepository.modelRevision?.takeIf { it.isNotBlank() }?.let { revision ->
+                MaaHomeDivider()
+                FrameworkHomeInfoRow(
+                    label = "模型版本",
+                    value = revision.take(7),
                 )
-                SettingsDivider()
-                SettingsInfoRow(
-                    label = "资源分支",
-                    value = state.resourceRepository.branch,
-                )
-                state.resourceRepository.modelRevision?.takeIf { it.isNotBlank() }?.let { revision ->
-                    SettingsDivider()
-                    SettingsInfoRow(
-                        label = "模型版本",
-                        value = revision.take(7),
-                    )
-                }
-                SettingsDivider()
-                SettingsActionRow(
+            }
+            MaaHomeDivider()
+            FrameworkHomeActionRow(
+                action = FrameworkHomeAction(
                     title = "打开项目主页",
                     description = "查看 MaaEnd-Android 仓库和最新提交",
                     actionLabel = "打开",
                     onClick = { uriHandler.openUri("https://github.com/MaaEnd/MaaEnd-Android") },
-                )
-            }
+                ),
+            )
         }
     }
 }
@@ -2230,29 +2241,18 @@ private fun LogsScreen(
         }
     }
 
-    Card(
+    FrameworkRuntimeLogsPanel(
+        lines = displayLines,
+        subtitle = state.runtimeState.lastMessage.ifBlank { state.lastMessage },
         modifier = Modifier.fillMaxSize(),
-        shape = RoundedCornerShape(MaaEndDesignTokens.CornerRadius.card),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
+        metrics = listOf(
+            FrameworkLogMetric(label = "阶段", value = state.runtimeState.phase.displayName()),
+            FrameworkLogMetric(label = "当前任务", value = currentTaskLabel ?: state.runtimeState.currentTaskId ?: "-"),
+            FrameworkLogMetric(label = "日志级别", value = state.settings.logLevel),
         ),
-        border = BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f),
-        ),
-    ) {
-        FrameworkRuntimeLogList(
-            lines = displayLines,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(
-                    horizontal = MaaEndDesignTokens.Spacing.sm,
-                    vertical = MaaEndDesignTokens.Spacing.sm,
-                ),
-            emptyTitle = "暂无日志",
-            emptyDescription = "开始一次任务后，这里会显示当前任务动态和原始运行日志。",
-        )
-    }
+        emptyTitle = "暂无日志",
+        emptyDescription = "开始一次任务后，这里会显示当前任务动态和原始运行日志。",
+    )
 }
 
 @Composable
