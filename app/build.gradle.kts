@@ -120,6 +120,7 @@ tasks.named("preBuild") {
 
 dependencies {
     implementation(project(":framework"))
+    implementation(project(":framework-ui"))
 
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.12.4")

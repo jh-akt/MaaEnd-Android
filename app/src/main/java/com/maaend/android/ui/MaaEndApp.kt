@@ -125,6 +125,12 @@ import com.maaframework.android.model.TaskDescriptor
 import com.maaframework.android.model.TaskOptionDescriptor
 import com.maaframework.android.model.TaskOptionType
 import com.maaframework.android.preview.DefaultDisplayConfig
+import com.maaframework.android.ui.MaaFullscreenPreviewOverlay as FrameworkFullscreenPreviewOverlay
+import com.maaframework.android.ui.MaaPreviewPanel as FrameworkPreviewPanel
+import com.maaframework.android.ui.MaaPreviewSurfaceHost as FrameworkPreviewSurfaceHost
+import com.maaframework.android.ui.MaaTaskDetailPanel as FrameworkTaskDetailPanel
+import com.maaframework.android.ui.MaaTaskListPanel as FrameworkTaskListPanel
+import com.maaframework.android.ui.MaaTaskOptionsForm as FrameworkTaskOptionsForm
 import com.maaend.android.runtime.PersistentResourceRepositoryManager
 import com.maaend.android.runtime.PersistentResourceRepositorySyncProgress
 import com.maaend.android.runtime.PersistentResourceRepositoryStatus
@@ -140,62 +146,13 @@ fun MaaEndApp(viewModel: MainViewModel) {
     MaaEndTheme {
         val state by viewModel.uiState.collectAsState()
         var isFullscreenPreview by rememberSaveable { mutableStateOf(false) }
-        var lastSurface by remember { mutableStateOf<Surface?>(null) }
 
         val previewContent = remember {
             movableContentOf {
-                val scope = rememberCoroutineScope()
-                Box(
+                FrameworkPreviewSurfaceHost(
                     modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier.aspectRatio(DefaultDisplayConfig.ASPECT_RATIO),
-                    ) {
-                        AndroidView(
-                            factory = { context ->
-                                SurfaceView(context).apply {
-                                    holder.setFormat(PixelFormat.RGBA_8888)
-                                    holder.addCallback(object : SurfaceHolder.Callback {
-                                        override fun surfaceCreated(holder: SurfaceHolder) {
-                                            scope.launch {
-                                                delay(50)
-                                                holder.setFixedSize(
-                                                    DefaultDisplayConfig.WIDTH,
-                                                    DefaultDisplayConfig.HEIGHT,
-                                                )
-                                            }
-                                        }
-
-                                        override fun surfaceChanged(
-                                            holder: SurfaceHolder,
-                                            format: Int,
-                                            width: Int,
-                                            height: Int,
-                                        ) {
-                                            if (width == DefaultDisplayConfig.WIDTH &&
-                                                height == DefaultDisplayConfig.HEIGHT
-                                            ) {
-                                                if (lastSurface !== holder.surface) {
-                                                    lastSurface = holder.surface
-                                                    viewModel.setPreviewSurface(holder.surface)
-                                                }
-                                            }
-                                        }
-
-                                        override fun surfaceDestroyed(holder: SurfaceHolder) {
-                                            if (lastSurface != null) {
-                                                lastSurface = null
-                                                viewModel.setPreviewSurface(null)
-                                            }
-                                        }
-                                    })
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                }
+                    onPreviewSurfaceChanged = viewModel::setPreviewSurface,
+                )
             }
         }
 
@@ -280,10 +237,12 @@ fun MaaEndApp(viewModel: MainViewModel) {
             }
 
             if (isFullscreenPreview) {
-                FullscreenPreviewOverlay(
-                    viewModel = viewModel,
+                FrameworkFullscreenPreviewOverlay(
                     previewContent = previewContent,
                     onDismissRequest = { isFullscreenPreview = false },
+                    onPreviewTouchDown = viewModel::onPreviewTouchDown,
+                    onPreviewTouchMove = viewModel::onPreviewTouchMove,
+                    onPreviewTouchUp = viewModel::onPreviewTouchUp,
                 )
             }
             if (state.resourceRepositoryClearConfirmVisible) {
@@ -755,7 +714,7 @@ private fun TaskScreen(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.sm),
     ) {
-        PreviewCard(
+        FrameworkPreviewPanel(
             isFullscreenPreview = isFullscreenPreview,
             onExpandPreview = onExpandPreview,
             previewContent = previewContent,
@@ -768,14 +727,17 @@ private fun TaskScreen(
             horizontalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.sm),
             verticalAlignment = Alignment.Top,
         ) {
-            TaskListPanel(
+            FrameworkTaskListPanel(
                 tasks = visibleTasks,
                 selectedTaskId = selectedTaskId,
                 checkedTaskIds = checkedTaskIds,
-                onSelect = onSelect,
-                onToggleChecked = onToggleChecked,
+                onSelectTask = onSelect,
+                onToggleTaskChecked = onToggleChecked,
                 modifier = Modifier
                     .fillMaxHeight(),
+                runningTaskId = state.runtimeState.currentTaskId,
+                pinnedTaskIds = ProjectInterfaceSupport.PINNED_TASK_IDS,
+                taskLabel = ::compactTaskLabel,
             )
 
             Column(
@@ -784,7 +746,7 @@ private fun TaskScreen(
                     .fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.sm),
             ) {
-                TaskConfigPanel(
+                FrameworkTaskDetailPanel(
                     task = selectedTask,
                     options = visibleTaskOptions,
                     selectedCaseNamesByOption = selectedTask?.let { taskOptionSelectionsByTask[it.id].orEmpty() }.orEmpty(),
@@ -1075,7 +1037,7 @@ private fun ResourceConfigPanel(
                 onClick = { showGlobalConfig = !showGlobalConfig },
             )
             if (showGlobalConfig) {
-                OptionConfigCard(
+                FrameworkTaskOptionsForm(
                     ownerId = ProjectInterfaceSupport.GLOBAL_SCOPE_ID,
                     title = "全局配置",
                     description = "",
@@ -1101,7 +1063,7 @@ private fun ResourceConfigPanel(
                 onClick = { showResourceConfig = !showResourceConfig },
             )
             if (showResourceConfig) {
-                OptionConfigCard(
+                FrameworkTaskOptionsForm(
                     ownerId = ProjectInterfaceSupport.resourceScopeId(selectedResource.id),
                     title = "${selectedResource.label} 配置",
                     description = "",

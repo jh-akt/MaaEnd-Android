@@ -20,4 +20,7 @@ rootProject.name = "MaaEndAndroid"
 include(":framework")
 project(":framework").projectDir = file("MaaFramework-Android/framework")
 
+include(":framework-ui")
+project(":framework-ui").projectDir = file("MaaFramework-Android/framework-ui")
+
 include(":app")
