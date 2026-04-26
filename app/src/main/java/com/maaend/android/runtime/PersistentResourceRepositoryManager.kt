@@ -63,13 +63,9 @@ object PersistentResourceRepositoryManager {
     }
 
     fun clearLocalCache(context: Context): PersistentResourceRepositoryStatus {
-        runCatching {
-            val baseDir = currentRoot(context).parentFile
-            if (baseDir != null && baseDir.exists()) {
-                deleteRecursively(baseDir)
-            }
-        }
-        return loadStatus(context)
+        val manifest = loadManifest(context)
+        return PersistentProjectRepositoryManager.clearLocalCache(context, manifest)
+            .toMaaEndStatus(manifest)
     }
 
     fun updateFromGithub(
@@ -115,15 +111,4 @@ object PersistentResourceRepositoryManager {
         )
     }
 
-    private fun deleteRecursively(file: File) {
-        if (!file.exists()) {
-            return
-        }
-        if (file.isDirectory) {
-            file.listFiles()?.forEach(::deleteRecursively)
-        }
-        check(file.delete() || !file.exists()) {
-            "Failed to delete ${file.absolutePath}"
-        }
-    }
 }

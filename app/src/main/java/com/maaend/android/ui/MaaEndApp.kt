@@ -141,6 +141,7 @@ import com.maaframework.android.ui.MaaHomeTone as FrameworkHomeTone
 import com.maaframework.android.ui.MaaLogMetric as FrameworkLogMetric
 import com.maaframework.android.ui.MaaPreviewPanel as FrameworkPreviewPanel
 import com.maaframework.android.ui.MaaPreviewSurfaceHost as FrameworkPreviewSurfaceHost
+import com.maaframework.android.ui.MaaResourceRepositoryContent as FrameworkResourceRepositoryContent
 import com.maaframework.android.ui.MaaRuntimeLogList as FrameworkRuntimeLogList
 import com.maaframework.android.ui.MaaRuntimeLogsPanel as FrameworkRuntimeLogsPanel
 import com.maaframework.android.ui.MaaSettingsChoice as FrameworkSettingsChoice
@@ -1747,26 +1748,18 @@ private fun SettingsScreen(
 
     FrameworkSettingsPanel {
         FrameworkSettingsSection(title = "资源") {
-            FrameworkHomeInfoRow(
-                label = "资源仓库",
-                value = resourceRepositorySummary(state.resourceRepository),
-            )
-            state.resourceRepository.rootPath?.takeIf { it.isNotBlank() }?.let { rootPath ->
-                MaaHomeDivider()
-                FrameworkHomeSupportText(
-                    text = rootPath,
-                    tone = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            state.resourceRepository.lastError?.takeIf { it.isNotBlank() }?.let { error ->
-                MaaHomeDivider()
-                FrameworkHomeSupportText(
-                    text = error,
-                    tone = MaterialTheme.colorScheme.error,
-                )
-            }
-            MaaHomeDivider()
-            FrameworkHomeActionRow(
+            FrameworkResourceRepositoryContent(
+                summary = resourceRepositorySummary(state.resourceRepository),
+                rootPath = state.resourceRepository.rootPath,
+                error = state.resourceRepository.lastError,
+                progress = if (state.resourceRepositoryUpdating && state.resourceRepositoryProgress != null) {
+                    FrameworkHomeProgress(
+                        fraction = state.resourceRepositoryProgress.fraction,
+                        label = state.resourceRepositoryProgress.label,
+                    )
+                } else {
+                    null
+                },
                 action = FrameworkHomeAction(
                     title = if (state.resourceRepository.available) "更新 GitHub 资源" else "下载 GitHub 资源",
                     description = if (state.resourceRepositoryUpdating) {
@@ -1778,10 +1771,7 @@ private fun SettingsScreen(
                     enabled = !state.resourceRepositoryUpdating,
                     onClick = viewModel::refreshResourceRepository,
                 ),
-            )
-            MaaHomeDivider()
-            FrameworkHomeActionRow(
-                action = FrameworkHomeAction(
+                clearAction = FrameworkHomeAction(
                     title = "清空 GitHub 资源",
                     description = "删除当前缓存和历史目录，下次更新会重新下载，适合排除旧数据干扰",
                     actionLabel = if (state.resourceRepositoryUpdating) "处理中" else "清空",
@@ -1789,15 +1779,6 @@ private fun SettingsScreen(
                     onClick = viewModel::requestClearResourceRepositoryConfirmation,
                 ),
             )
-            if (state.resourceRepositoryUpdating && state.resourceRepositoryProgress != null) {
-                MaaHomeDivider()
-                FrameworkHomeProgressBlock(
-                    progress = FrameworkHomeProgress(
-                        fraction = state.resourceRepositoryProgress.fraction,
-                        label = state.resourceRepositoryProgress.label,
-                    ),
-                )
-            }
             if (!state.resourceRepositoryUpdating && state.lastMessage.isNotBlank()) {
                 MaaHomeDivider()
                 FrameworkHomeSupportText(
