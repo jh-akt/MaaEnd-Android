@@ -2,17 +2,15 @@ package com.maaend.android
 
 import android.app.Application
 import android.util.Log
-import com.maaend.android.bridge.DriverClass
-import com.maaend.android.root.RootManager
+import com.maaframework.android.MaaFrameworkAndroid
 
 class MaaEndAndroidApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        DriverClass.installContext(this)
         runCatching {
-            RootManager.initialize(this)
+            MaaFrameworkAndroid.initialize(this)
         }.onFailure { error ->
-            Log.e(TAG, "Failed to initialize root manager", error)
+            Log.e(TAG, "Failed to initialize MaaFramework Android", error)
         }
     }
 

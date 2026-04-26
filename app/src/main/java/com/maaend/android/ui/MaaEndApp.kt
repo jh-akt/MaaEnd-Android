@@ -118,13 +118,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.maaend.android.BuildConfig
-import com.maaend.android.catalog.InterfaceCatalogLoader
-import com.maaend.android.model.RuntimeStateSnapshot
-import com.maaend.android.model.RunSessionPhase
-import com.maaend.android.model.TaskDescriptor
-import com.maaend.android.model.TaskOptionDescriptor
-import com.maaend.android.model.TaskOptionType
-import com.maaend.android.preview.DefaultDisplayConfig
+import com.maaframework.android.model.ResourceDescriptor
+import com.maaframework.android.model.RuntimeStateSnapshot
+import com.maaframework.android.model.RunSessionPhase
+import com.maaframework.android.model.TaskDescriptor
+import com.maaframework.android.model.TaskOptionDescriptor
+import com.maaframework.android.model.TaskOptionType
+import com.maaframework.android.preview.DefaultDisplayConfig
 import com.maaend.android.runtime.PersistentResourceRepositoryManager
 import com.maaend.android.runtime.PersistentResourceRepositorySyncProgress
 import com.maaend.android.runtime.PersistentResourceRepositoryStatus
@@ -870,7 +870,7 @@ private fun TaskListPanel(
     modifier: Modifier = Modifier,
 ) {
     val (pinnedTasks, otherTasks) = tasks.partition {
-        it.id in InterfaceCatalogLoader.PINNED_TASK_IDS
+        it.id in ProjectInterfaceSupport.PINNED_TASK_IDS
     }
     Column(
         modifier = modifier
@@ -935,8 +935,8 @@ private fun TaskSectionDivider() {
 
 @Composable
 private fun ResourceConfigPanel(
-    resources: List<com.maaend.android.model.ResourceDescriptor>,
-    selectedResource: com.maaend.android.model.ResourceDescriptor?,
+    resources: List<ResourceDescriptor>,
+    selectedResource: ResourceDescriptor?,
     resourceRepository: PersistentResourceRepositoryStatus,
     resourceRepositoryUpdating: Boolean,
     resourceRepositoryProgress: PersistentResourceRepositorySyncProgress?,

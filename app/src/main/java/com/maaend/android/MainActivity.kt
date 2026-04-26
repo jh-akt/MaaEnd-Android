@@ -11,7 +11,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.maaend.android.ui.MaaEndApp
 import com.maaend.android.ui.MainViewModel
-import com.maaend.android.model.RunSessionPhase
+import com.maaframework.android.model.RunSessionPhase
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {

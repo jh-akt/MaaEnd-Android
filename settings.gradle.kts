@@ -16,4 +16,8 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "MaaEndAndroid"
+
+include(":framework")
+project(":framework").projectDir = file("MaaFramework-Android/framework")
+
 include(":app")

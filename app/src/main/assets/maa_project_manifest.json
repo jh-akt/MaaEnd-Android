@@ -1,0 +1,37 @@
+{
+  "project_id": "maaend",
+  "display_name": "MaaEnd Android",
+  "default_resource_id": "官服",
+  "default_task_id": "AndroidOpenGame",
+  "default_preset_id": "QuickDaily",
+  "supported_controllers": [
+    "adb",
+    "ADB",
+    "安卓端"
+  ],
+  "attach_resource_paths": [
+    "./resource_adb"
+  ],
+  "github_resource_repository": {
+    "owner": "MaaEnd",
+    "repo": "MaaEnd",
+    "branch": "v2",
+    "asset_root_path": "assets",
+    "required_paths": [
+      "interface.json",
+      "resource",
+      "resource_adb",
+      "resource/model"
+    ],
+    "submodules": [
+      {
+        "api_path": "assets/resource/model",
+        "target_path": "resource/model",
+        "fallback_git_url": "https://github.com/MaaEnd/MaaEnd-AI.git"
+      }
+    ]
+  },
+  "resource_package_names": {
+    "官服": "com.hypergryph.endfield"
+  }
+}

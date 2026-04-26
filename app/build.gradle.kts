@@ -80,7 +80,6 @@ android {
     }
 
     buildFeatures {
-        aidl = true
         buildConfig = true
         compose = true
     }
@@ -106,13 +105,6 @@ android {
             )
         }
     }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/native/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
 }
 
 kotlin {
@@ -127,6 +119,8 @@ tasks.named("preBuild") {
 }
 
 dependencies {
+    implementation(project(":framework"))
+
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.12.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
@@ -142,8 +136,6 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("com.github.topjohnwu.libsu:core:6.0.0")
-    implementation("net.java.dev.jna:jna:5.18.1") { artifact { type = "aar" } }
 
     testImplementation("junit:junit:4.13.2")
 }

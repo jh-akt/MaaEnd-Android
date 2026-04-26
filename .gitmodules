@@ -1,0 +1,3 @@
+[submodule "MaaFramework-Android"]
+	path = MaaFramework-Android
+	url = git@github.com:jh-akt/MaaFramework-Android.git

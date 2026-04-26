@@ -8,18 +8,18 @@ import android.util.Log
 import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.maaend.android.catalog.InterfaceCatalogLoader
-import com.maaend.android.ipc.IRootRuntimeService
-import com.maaend.android.model.CatalogSnapshot
-import com.maaend.android.model.ResourceDescriptor
-import com.maaend.android.model.RunRequest
-import com.maaend.android.model.RuntimeLogChunk
-import com.maaend.android.model.RuntimeStateSnapshot
-import com.maaend.android.model.TaskDescriptor
-import com.maaend.android.model.TaskOptionDescriptor
-import com.maaend.android.model.TaskSequenceSupport
-import com.maaend.android.root.RootManager
-import com.maaend.android.root.RootRuntimeConnector
+import com.maaframework.android.catalog.InterfaceCatalogLoader
+import com.maaframework.android.model.CatalogSnapshot
+import com.maaframework.android.model.ResourceDescriptor
+import com.maaframework.android.model.RunRequest
+import com.maaframework.android.model.RuntimeLogChunk
+import com.maaframework.android.model.RuntimeStateSnapshot
+import com.maaframework.android.model.TaskDescriptor
+import com.maaframework.android.model.TaskOptionDescriptor
+import com.maaframework.android.model.TaskOptionType
+import com.maaframework.android.project.MaaProjectManifestLoader
+import com.maaframework.android.session.MaaFrameworkSession
+import com.maaframework.android.session.MaaRuntimeClient
 import com.maaend.android.runtime.PersistentResourceRepositoryManager
 import com.maaend.android.runtime.PersistentResourceRepositorySyncProgress
 import com.maaend.android.runtime.PersistentResourceRepositoryStatus
@@ -34,7 +34,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -85,14 +84,15 @@ class MainViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val catalogLoader = InterfaceCatalogLoader(application.assets)
+    private val manifest = MaaProjectManifestLoader.loadOrDefault(application.assets)
+    private val catalogLoader = InterfaceCatalogLoader(application.assets, manifest.supportedControllers)
     private val settingsRepository = AppSettingsRepository(application)
-    private val rootConnector = RootRuntimeConnector(application)
+    private val session = MaaFrameworkSession(application)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
-    private var service: IRootRuntimeService? = null
+    private var service: MaaRuntimeClient? = null
     private var pollJob: Job? = null
     private var connectJob: Job? = null
     private var previewSurface: Surface? = null
@@ -131,12 +131,12 @@ class MainViewModel(
         if (!resourceRepository.available && catalog.tasks.isEmpty() && lastMessage == "Root 运行环境已就绪") {
             lastMessage = "首次启动需要同步 MaaEnd 资源，正在后台下载"
         }
-        val rootAvailable = runCatching { RootManager.isAvailable() }
+        val rootAvailable = runCatching { session.isRootAvailable() }
             .getOrElse { error ->
                 Log.e(TAG, "Failed to detect root availability", error)
                 false
             }
-        val rootGranted = runCatching { RootManager.isGranted() }
+        val rootGranted = runCatching { session.isRootGranted() }
             .getOrElse { error ->
                 Log.e(TAG, "Failed to detect root grant state", error)
                 false
@@ -300,7 +300,7 @@ class MainViewModel(
             return
         }
         val selectedResource = selectedResource()
-        val tasks = TaskSequenceSupport.ensureOpenGameFirst(
+        val tasks = ProjectInterfaceSupport.ensureOpenGameFirst(
             tasks = requestedTasks,
             availableTasks = visibleTasks(
                 _uiState.value.catalog.tasks,
@@ -568,7 +568,7 @@ class MainViewModel(
     fun startWindowedGame() {
         viewModelScope.launch {
             val runtimeService = requireRuntimeService() ?: return@launch
-            val ok = runCatching { runtimeService.startWindowedGame() }.getOrDefault(false)
+            val ok = runCatching { runtimeService.startWindowedGame(_uiState.value.selectedResourceId) }.getOrDefault(false)
             refreshRuntimeState()
             _uiState.value = _uiState.value.copy(
                 lastMessage = if (ok) "已在应用内拉起窗口模式" else "窗口模式启动失败",
@@ -590,7 +590,7 @@ class MainViewModel(
     }
 
     fun getWindowedDisplayId(): Int {
-        return runCatching { service?.windowedDisplayId ?: -1 }.getOrDefault(-1)
+        return runCatching { service?.getWindowedDisplayId() ?: -1 }.getOrDefault(-1)
     }
 
     private fun startRun(request: RunRequest) {
@@ -598,7 +598,7 @@ class MainViewModel(
             val runtimeService = requireRuntimeService() ?: return@launch
 
             val started = runCatching {
-                runtimeService.startRun(json.encodeToString(request))
+                runtimeService.startRun(request)
             }.getOrDefault(false)
             refreshRuntimeState()
             _uiState.value = _uiState.value.copy(
@@ -622,10 +622,8 @@ class MainViewModel(
         val runtimeService = service ?: return
         runCatching {
             val polled = withContext(Dispatchers.IO) {
-                val state = json.decodeFromString<RuntimeStateSnapshot>(runtimeService.getState())
-                val logChunk = json.decodeFromString<RuntimeLogChunk>(
-                    runtimeService.readLogChunk(logCursor, LOG_CHUNK_LINES),
-                )
+                val state = runtimeService.getState()
+                val logChunk = runtimeService.readLogChunk(logCursor, LOG_CHUNK_LINES)
                 state to logChunk
             }
             val (state, logChunk) = polled
@@ -657,14 +655,14 @@ class MainViewModel(
         }
     }
 
-    private suspend fun requireRuntimeService(): IRootRuntimeService? {
+    private suspend fun requireRuntimeService(): MaaRuntimeClient? {
         currentAliveService()?.let { return it }
         connectJob?.takeIf { it.isActive }?.join()
         currentAliveService()?.let { return it }
         return connectRootRuntime(silent = false)
     }
 
-    private suspend fun connectRootRuntime(silent: Boolean): IRootRuntimeService? {
+    private suspend fun connectRootRuntime(silent: Boolean): MaaRuntimeClient? {
         currentAliveService()?.let { runtimeService ->
             if (!silent) {
                 _uiState.value = _uiState.value.copy(lastMessage = "Root Runtime 已连接")
@@ -672,7 +670,7 @@ class MainViewModel(
             return runtimeService
         }
 
-        val rootAvailable = runCatching { RootManager.isAvailable() }.getOrDefault(false)
+        val rootAvailable = runCatching { session.isRootAvailable() }.getOrDefault(false)
         _uiState.value = _uiState.value.copy(
             busy = true,
             rootAvailable = rootAvailable,
@@ -690,7 +688,7 @@ class MainViewModel(
             return null
         }
 
-        val granted = RootManager.requestPermission()
+        val granted = session.requestRootPermission()
         if (!granted) {
             _uiState.value = _uiState.value.copy(
                 busy = false,
@@ -701,7 +699,7 @@ class MainViewModel(
             return null
         }
 
-        val result = rootConnector.connect()
+        val result = session.connectClient()
         return result.onSuccess { runtimeService ->
             service = runtimeService
             previewSurface?.let { surface ->
@@ -735,7 +733,7 @@ class MainViewModel(
         }.getOrNull()
     }
 
-    private suspend fun currentAliveService(): IRootRuntimeService? {
+    private suspend fun currentAliveService(): MaaRuntimeClient? {
         val existingService = service ?: return null
         val ping = runCatching { existingService.ping() }.getOrNull()
         if (!ping.isNullOrBlank()) {
@@ -750,7 +748,7 @@ class MainViewModel(
             return existingService
         }
 
-        rootConnector.disconnect(existingService)
+        session.disconnect(existingService)
         service = null
         syncScreenOnReceiver(false)
         _uiState.value = _uiState.value.copy(
@@ -824,7 +822,7 @@ class MainViewModel(
         runCatching { service?.setDisplayPower(true) }
         runCatching { service?.stopWindowedPreview() }
         previewSurface = null
-        rootConnector.disconnect(service)
+        session.disconnect(service)
         service = null
     }
 
@@ -1100,9 +1098,9 @@ class MainViewModel(
     ) {
         options.forEach { option ->
             when (option.type) {
-                com.maaend.android.model.TaskOptionType.Switch,
-                com.maaend.android.model.TaskOptionType.Select,
-                com.maaend.android.model.TaskOptionType.Checkbox -> {
+                TaskOptionType.Switch,
+                TaskOptionType.Select,
+                TaskOptionType.Checkbox -> {
                     val selectedCaseNames = selectedByOption[option.id].takeUnless { it.isNullOrEmpty() }
                         ?: ProjectInterfaceSupport.defaultSelectionForOption(option)
                     option.cases
@@ -1118,7 +1116,7 @@ class MainViewModel(
                         }
                 }
 
-                com.maaend.android.model.TaskOptionType.Input -> {
+                TaskOptionType.Input -> {
                     val values = buildInputValues(option, inputValuesByOption[option.id].orEmpty())
                     onMerge(applyInputPlaceholders(option.pipelineOverrideJson, values))
                 }
