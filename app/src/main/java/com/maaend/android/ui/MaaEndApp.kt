@@ -128,6 +128,7 @@ import com.maaframework.android.preview.DefaultDisplayConfig
 import com.maaframework.android.ui.MaaFullscreenPreviewOverlay as FrameworkFullscreenPreviewOverlay
 import com.maaframework.android.ui.MaaPreviewPanel as FrameworkPreviewPanel
 import com.maaframework.android.ui.MaaPreviewSurfaceHost as FrameworkPreviewSurfaceHost
+import com.maaframework.android.ui.MaaRuntimeLogList as FrameworkRuntimeLogList
 import com.maaframework.android.ui.MaaTaskDetailPanel as FrameworkTaskDetailPanel
 import com.maaframework.android.ui.MaaTaskListPanel as FrameworkTaskListPanel
 import com.maaframework.android.ui.MaaTaskOptionsForm as FrameworkTaskOptionsForm
@@ -2225,7 +2226,6 @@ private fun LogsScreen(
     currentTaskLabel: String?,
 ) {
     val lines = state.displayLogs
-    val listState = rememberLazyListState()
     val taskStatusLines = remember(
         state.runtimeState.phase,
         state.runtimeState.currentTaskId,
@@ -2248,9 +2248,15 @@ private fun LogsScreen(
             addAll(visibleRuntimeLines)
         }
     }
-    LaunchedEffect(mergedLines.size) {
-        if (mergedLines.isNotEmpty()) {
-            listState.animateScrollToItem(mergedLines.lastIndex)
+    val displayLines = remember(mergedLines) {
+        mergedLines.map { line ->
+            buildString {
+                append(line.time ?: "--:--:--")
+                append(" [")
+                append(line.level.displayName)
+                append("] ")
+                append(line.content)
+            }
         }
     }
 
@@ -2265,33 +2271,17 @@ private fun LogsScreen(
             MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f),
         ),
     ) {
-        if (taskStatusLines.isEmpty() && visibleRuntimeLines.isEmpty()) {
-            EmptyStateBlock(
-                title = "暂无日志",
-                description = "开始一次任务后，这里会显示当前任务动态和原始运行日志。",
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
+        FrameworkRuntimeLogList(
+            lines = displayLines,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
                     horizontal = MaaEndDesignTokens.Spacing.sm,
                     vertical = MaaEndDesignTokens.Spacing.sm,
                 ),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(mergedLines) { line ->
-                    StatusLogLine(
-                        time = line.time,
-                        levelLabel = line.level.displayName,
-                        levelColor = line.level.color,
-                        content = line.content,
-                        monospace = line.time != null,
-                    )
-                }
-            }
-        }
+            emptyTitle = "暂无日志",
+            emptyDescription = "开始一次任务后，这里会显示当前任务动态和原始运行日志。",
+        )
     }
 }
 
