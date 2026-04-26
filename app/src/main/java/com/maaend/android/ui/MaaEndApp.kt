@@ -126,6 +126,12 @@ import com.maaframework.android.model.TaskOptionDescriptor
 import com.maaframework.android.model.TaskOptionType
 import com.maaframework.android.preview.DefaultDisplayConfig
 import com.maaframework.android.ui.MaaFullscreenPreviewOverlay as FrameworkFullscreenPreviewOverlay
+import com.maaframework.android.ui.MaaHomeAction as FrameworkHomeAction
+import com.maaframework.android.ui.MaaHomeInfo as FrameworkHomeInfo
+import com.maaframework.android.ui.MaaHomePanel as FrameworkHomePanel
+import com.maaframework.android.ui.MaaHomeService as FrameworkHomeService
+import com.maaframework.android.ui.MaaHomeStatus as FrameworkHomeStatus
+import com.maaframework.android.ui.MaaHomeTone as FrameworkHomeTone
 import com.maaframework.android.ui.MaaPreviewPanel as FrameworkPreviewPanel
 import com.maaframework.android.ui.MaaPreviewSurfaceHost as FrameworkPreviewSurfaceHost
 import com.maaframework.android.ui.MaaRuntimeLogList as FrameworkRuntimeLogList
@@ -401,100 +407,64 @@ private fun HomeScreen(
         "${state.catalog.tasks.size} 个任务 / ${state.catalog.presets.size} 个预设"
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = MaaEndDesignTokens.Spacing.sm),
-        verticalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.sm),
-    ) {
-        item {
-            SettingsSectionHeader(title = "概览")
-            SettingsGroupCard {
-                HomeInfoRow(
-                    label = "屏幕分辨率",
-                    value = screenSizeLabel,
-                )
-                SettingsDivider()
-                HomeInfoRow(
+    FrameworkHomePanel(
+        overview = buildList {
+            add(FrameworkHomeInfo("屏幕分辨率", screenSizeLabel))
+            add(
+                FrameworkHomeInfo(
                     label = "接口资源",
                     value = resourceSummary,
-                    valueColor = if (state.catalog.tasks.isEmpty()) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-                SettingsDivider()
-                HomeServiceRow(
-                    label = "Runtime 服务",
-                    value = homeServiceStatusLabel(state),
-                    color = homeServiceStatusColor(state),
-                    loading = state.busy && !state.rootConnected,
-                )
-                SettingsDivider()
-                HomeInfoRow(
-                    label = "运行阶段",
-                    value = state.runtimeState.phase.displayName(),
-                )
-                state.runtimeState.currentTaskId?.takeIf { it.isNotBlank() }?.let { currentTaskId ->
-                    SettingsDivider()
-                    HomeInfoRow(
-                        label = "当前任务",
-                        value = currentTaskId,
-                    )
-                }
-                SettingsDivider()
-                FlowRow(
-                    modifier = Modifier.padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.sm),
-                    verticalArrangement = Arrangement.spacedBy(MaaEndDesignTokens.Spacing.sm),
-                ) {
-                    StatusPill("Root 可用", state.rootAvailable)
-                    StatusPill("授权通过", state.rootGranted)
-                    StatusPill("服务在线", state.rootConnected)
-                }
+                    tone = if (state.catalog.tasks.isEmpty()) FrameworkHomeTone.Error else FrameworkHomeTone.Neutral,
+                ),
+            )
+            add(FrameworkHomeInfo("运行阶段", state.runtimeState.phase.displayName()))
+            state.runtimeState.currentTaskId?.takeIf { it.isNotBlank() }?.let { currentTaskId ->
+                add(FrameworkHomeInfo("当前任务", currentTaskId))
             }
-        }
-
-        item {
-            SettingsSectionHeader(title = "快捷操作")
-            SettingsGroupCard {
-                SettingsActionRow(
-                    title = "准备运行时",
-                    actionLabel = if (state.runtimeState.runtimePrepared) "已就绪" else "执行",
-                    enabled = !state.busy,
-                    onClick = viewModel::prepareRuntime,
-                )
-                SettingsDivider()
-                SettingsActionRow(
-                    title = "打开游戏",
-                    actionLabel = "打开",
-                    enabled = !state.busy,
-                    onClick = viewModel::startWindowedGame,
-                )
-                SettingsDivider()
-                SettingsActionRow(
-                    title = if (state.rootConnected) "重新连接 Runtime" else "连接 Root / Runtime",
-                    actionLabel = if (state.busy && !state.rootConnected) {
-                        "连接中"
-                    } else if (state.rootConnected) {
-                        "重连"
-                    } else {
-                        "连接"
-                    },
-                    enabled = !state.busy,
-                    onClick = viewModel::requestRootAndConnect,
-                )
-                SettingsDivider()
-                SettingsActionRow(
-                    title = "导出诊断包",
-                    actionLabel = if (state.runtimeState.lastDiagnosticsPath.isNullOrBlank()) "导出" else "最新",
-                    onClick = viewModel::exportDiagnostics,
-                )
-            }
-        }
-
-        item {
-            SettingsSectionHeader(title = "全局与资源")
+        },
+        service = FrameworkHomeService(
+            label = "Runtime 服务",
+            value = homeServiceStatusLabel(state),
+            tone = homeServiceTone(state),
+            loading = state.busy && !state.rootConnected,
+        ),
+        statuses = listOf(
+            FrameworkHomeStatus("Root 可用", state.rootAvailable),
+            FrameworkHomeStatus("授权通过", state.rootGranted),
+            FrameworkHomeStatus("服务在线", state.rootConnected),
+        ),
+        actions = listOf(
+            FrameworkHomeAction(
+                title = "准备运行时",
+                actionLabel = if (state.runtimeState.runtimePrepared) "已就绪" else "执行",
+                enabled = !state.busy,
+                onClick = viewModel::prepareRuntime,
+            ),
+            FrameworkHomeAction(
+                title = "打开游戏",
+                actionLabel = "打开",
+                enabled = !state.busy,
+                onClick = viewModel::startWindowedGame,
+            ),
+            FrameworkHomeAction(
+                title = if (state.rootConnected) "重新连接 Runtime" else "连接 Root / Runtime",
+                actionLabel = if (state.busy && !state.rootConnected) {
+                    "连接中"
+                } else if (state.rootConnected) {
+                    "重连"
+                } else {
+                    "连接"
+                },
+                enabled = !state.busy,
+                onClick = viewModel::requestRootAndConnect,
+            ),
+            FrameworkHomeAction(
+                title = "导出诊断包",
+                actionLabel = if (state.runtimeState.lastDiagnosticsPath.isNullOrBlank()) "导出" else "最新",
+                onClick = viewModel::exportDiagnostics,
+            ),
+        ),
+        resourceContent = {
             ResourceConfigPanel(
                 resources = state.catalog.resources,
                 selectedResource = selectedResource,
@@ -511,14 +481,14 @@ private fun HomeScreen(
                 resourceInputErrors = resourceInputErrors,
                 onSelectResource = onSelectResource,
                 onSwitchSharedOption = onSwitchSharedOption,
-                                onToggleSharedCheckboxOption = onToggleSharedCheckboxOption,
-                                onSharedInputValueChange = onSharedInputValueChange,
-                                onRefreshResourceRepository = viewModel::refreshResourceRepository,
-                                onClearResourceRepository = viewModel::requestClearResourceRepositoryConfirmation,
-                                hideDescriptions = true,
-                            )
-        }
-    }
+                onToggleSharedCheckboxOption = onToggleSharedCheckboxOption,
+                onSharedInputValueChange = onSharedInputValueChange,
+                onRefreshResourceRepository = viewModel::refreshResourceRepository,
+                onClearResourceRepository = viewModel::requestClearResourceRepositoryConfirmation,
+                hideDescriptions = true,
+            )
+        },
+    )
 }
 
 @Composable
@@ -3162,6 +3132,15 @@ private fun homeServiceStatusColor(state: MainUiState): Color {
         state.busy -> MaterialTheme.colorScheme.secondary
         state.rootGranted || state.rootAvailable -> Color(0xFFDD8A16)
         else -> MaterialTheme.colorScheme.error
+    }
+}
+
+private fun homeServiceTone(state: MainUiState): FrameworkHomeTone {
+    return when {
+        state.rootConnected -> FrameworkHomeTone.Positive
+        state.busy -> FrameworkHomeTone.Warning
+        state.rootGranted || state.rootAvailable -> FrameworkHomeTone.Warning
+        else -> FrameworkHomeTone.Error
     }
 }
 
