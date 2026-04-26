@@ -41,6 +41,14 @@ App-specific code lives in `app/`. Reusable framework code lives in `MaaFramewor
 
 If a fix is reusable across MaaEnd and Maa-bbb, make it in the sibling framework repository first (`../MaaFramework-Android`), then update this repo's submodule pointer. Do not re-copy framework source into `app/src/main/java/com/maaend/android/`.
 
+## Privacy And Git Hygiene
+
+- Before committing or pushing, verify `git config user.name` and `git config user.email`; use the GitHub noreply identity for this project, not a personal email or local machine identity.
+- Before pushing, scan recent commits with `git log --format='%an <%ae>%n%cn <%ce>' -n 10` and make sure author/committer metadata does not contain personal emails, local hostnames, or machine-specific identities.
+- Do not commit secrets, tokens, signing materials, private absolute paths, local-only service URLs, or raw diagnostic logs that may contain personal data. Prefer repo-relative paths and redacted examples in docs.
+- If privacy-sensitive data appears in commit history, stop and clean the history before pushing. After rewriting, check `git log --all` and relevant tags/remote refs for the sensitive string, then force-push only the refs that must be corrected.
+- Treat local stashes and unpushed branches as user data. Do not delete them just to remove old metadata unless the user explicitly approves.
+
 ## Read First
 
 Before changing code, read the relevant parts of:
