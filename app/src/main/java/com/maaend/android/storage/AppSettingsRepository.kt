@@ -1,6 +1,7 @@
 package com.maaend.android.storage
 
 import android.content.Context
+import com.maaframework.android.model.MaaLogLevels
 import java.io.InputStream
 import java.io.OutputStream
 import kotlinx.serialization.Serializable
@@ -37,7 +38,7 @@ class AppSettingsRepository(context: Context) {
             lastSelectedTaskId = prefs.getString(KEY_LAST_TASK_ID, null),
             lastSelectedPresetId = prefs.getString(KEY_LAST_PRESET_ID, null),
             selectedResourceId = prefs.getString(KEY_SELECTED_RESOURCE_ID, null),
-            logLevel = normalizeLogLevel(prefs.getString(KEY_LOG_LEVEL, "info")),
+            logLevel = MaaLogLevels.normalize(prefs.getString(KEY_LOG_LEVEL, MaaLogLevels.INFO)),
             checkedTaskIds = decode(KEY_CHECKED_TASK_IDS, emptySet()),
             taskOptionSelectionsByTask = decode(KEY_TASK_OPTION_SELECTIONS, emptyMap()),
             taskInputValuesByTask = decode(KEY_TASK_INPUT_VALUES, emptyMap()),
@@ -59,7 +60,7 @@ class AppSettingsRepository(context: Context) {
     }
 
     fun saveLogLevel(logLevel: String) {
-        prefs.edit().putString(KEY_LOG_LEVEL, normalizeLogLevel(logLevel)).apply()
+        prefs.edit().putString(KEY_LOG_LEVEL, MaaLogLevels.normalize(logLevel)).apply()
     }
 
     fun saveCheckedTaskIds(taskIds: Set<String>) {
@@ -113,7 +114,7 @@ class AppSettingsRepository(context: Context) {
             .putString(KEY_LAST_TASK_ID, settings.lastSelectedTaskId)
             .putString(KEY_LAST_PRESET_ID, settings.lastSelectedPresetId)
             .putString(KEY_SELECTED_RESOURCE_ID, settings.selectedResourceId)
-            .putString(KEY_LOG_LEVEL, normalizeLogLevel(settings.logLevel))
+            .putString(KEY_LOG_LEVEL, MaaLogLevels.normalize(settings.logLevel))
             .putString(KEY_CHECKED_TASK_IDS, json.encodeToString(settings.checkedTaskIds))
             .putString(KEY_TASK_OPTION_SELECTIONS, json.encodeToString(settings.taskOptionSelectionsByTask))
             .putString(KEY_TASK_INPUT_VALUES, json.encodeToString(settings.taskInputValuesByTask))
@@ -129,13 +130,6 @@ class AppSettingsRepository(context: Context) {
 
     private inline fun <reified T> encode(key: String, value: T) {
         prefs.edit().putString(key, json.encodeToString(value)).apply()
-    }
-
-    private fun normalizeLogLevel(logLevel: String?): String {
-        return when (logLevel?.lowercase()) {
-            "error", "warn", "info", "debug" -> logLevel.lowercase()
-            else -> "info"
-        }
     }
 
     private companion object {

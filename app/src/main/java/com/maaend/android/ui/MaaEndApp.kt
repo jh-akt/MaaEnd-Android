@@ -118,13 +118,22 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.maaend.android.BuildConfig
+import com.maaframework.android.model.MaaLogLevels
 import com.maaframework.android.model.ResourceDescriptor
 import com.maaframework.android.model.RuntimeStateSnapshot
-import com.maaframework.android.model.RunSessionPhase
+import com.maaframework.android.model.RunSessionPhaseText
 import com.maaframework.android.model.TaskDescriptor
 import com.maaframework.android.model.TaskOptionDescriptor
 import com.maaframework.android.model.TaskOptionType
+import com.maaframework.android.model.canStopRun
+import com.maaframework.android.model.canToggleDisplayPower
+import com.maaframework.android.model.displayName
 import com.maaframework.android.preview.DefaultDisplayConfig
+import com.maaframework.android.project.MaaProjectManifestLoader
+import com.maaframework.android.runtime.PersistentProjectRepositoryManager
+import com.maaframework.android.runtime.PersistentProjectRepositoryStatus
+import com.maaframework.android.runtime.PersistentProjectRepositorySyncProgress
+import com.maaframework.android.runtime.summaryText
 import com.maaframework.android.ui.MaaFullscreenPreviewOverlay as FrameworkFullscreenPreviewOverlay
 import com.maaframework.android.ui.MaaHomeAction as FrameworkHomeAction
 import com.maaframework.android.ui.MaaHomeActionRow as FrameworkHomeActionRow
@@ -151,9 +160,6 @@ import com.maaframework.android.ui.MaaSettingsSection as FrameworkSettingsSectio
 import com.maaframework.android.ui.MaaTaskDetailPanel as FrameworkTaskDetailPanel
 import com.maaframework.android.ui.MaaTaskListPanel as FrameworkTaskListPanel
 import com.maaframework.android.ui.MaaTaskOptionsForm as FrameworkTaskOptionsForm
-import com.maaend.android.runtime.PersistentResourceRepositoryManager
-import com.maaend.android.runtime.PersistentResourceRepositorySyncProgress
-import com.maaend.android.runtime.PersistentResourceRepositoryStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -430,7 +436,7 @@ private fun HomeScreen(
                     tone = if (state.catalog.tasks.isEmpty()) FrameworkHomeTone.Error else FrameworkHomeTone.Neutral,
                 ),
             )
-            add(FrameworkHomeInfo("运行阶段", state.runtimeState.phase.displayName()))
+            add(FrameworkHomeInfo("运行阶段", state.runtimeState.phase.displayName(RunSessionPhaseText.Chinese)))
             state.runtimeState.currentTaskId?.takeIf { it.isNotBlank() }?.let { currentTaskId ->
                 add(FrameworkHomeInfo("当前任务", currentTaskId))
             }
@@ -771,7 +777,7 @@ private fun TaskScreen(
                     .weight(1f)
                     .height(54.dp),
                 shape = RoundedCornerShape(MaaEndDesignTokens.CornerRadius.inner),
-                enabled = canStopRun(state.runtimeState),
+                enabled = state.runtimeState.canStopRun(),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = MaterialTheme.colorScheme.error,
                 ),
@@ -788,11 +794,7 @@ private fun TaskScreen(
                     .widthIn(min = 56.dp)
                     .height(48.dp),
                 shape = RoundedCornerShape(MaaEndDesignTokens.CornerRadius.inner),
-                enabled = state.runtimeState.phase in setOf(
-                    RunSessionPhase.Preparing,
-                    RunSessionPhase.Running,
-                    RunSessionPhase.Stopping,
-                ) || state.runtimeState.displayPowerOffActive,
+                enabled = state.runtimeState.canToggleDisplayPower(state.rootConnected),
                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
             ) {
                 Text(
@@ -883,9 +885,9 @@ private fun TaskSectionDivider() {
 private fun ResourceConfigPanel(
     resources: List<ResourceDescriptor>,
     selectedResource: ResourceDescriptor?,
-    resourceRepository: PersistentResourceRepositoryStatus,
+    resourceRepository: PersistentProjectRepositoryStatus,
     resourceRepositoryUpdating: Boolean,
-    resourceRepositoryProgress: PersistentResourceRepositorySyncProgress?,
+    resourceRepositoryProgress: PersistentProjectRepositorySyncProgress?,
     globalOptions: List<TaskOptionDescriptor>,
     globalSelections: Map<String, Set<String>>,
     globalInputs: Map<String, Map<String, String>>,
@@ -1792,12 +1794,7 @@ private fun SettingsScreen(
             FrameworkSettingsChoiceRow(
                 title = "日志级别",
                 description = "控制 root runtime 与日志页展示的详细程度",
-                options = listOf(
-                    FrameworkSettingsChoice("error", "错误"),
-                    FrameworkSettingsChoice("warn", "警告"),
-                    FrameworkSettingsChoice("info", "信息"),
-                    FrameworkSettingsChoice("debug", "调试"),
-                ),
+                options = MaaLogLevels.choices.map { FrameworkSettingsChoice(it, it.logLevelLabel()) },
                 selected = state.settings.logLevel,
                 onSelected = viewModel::updateLogLevel,
             )
@@ -1831,12 +1828,12 @@ private fun SettingsScreen(
             MaaHomeDivider()
             FrameworkHomeInfoRow(
                 label = "资源分支",
-                value = state.resourceRepository.branch,
+                value = state.resourceRepository.branch ?: "v2",
             )
-            state.resourceRepository.modelRevision?.takeIf { it.isNotBlank() }?.let { revision ->
+            state.resourceRepository.mainRevision?.takeIf { it.isNotBlank() }?.let { revision ->
                 MaaHomeDivider()
                 FrameworkHomeInfoRow(
-                    label = "模型版本",
+                    label = "资源版本",
                     value = revision.take(7),
                 )
             }
@@ -1855,7 +1852,7 @@ private fun SettingsScreen(
 
 @Composable
 private fun ResourceRepositoryProgressBlock(
-    progress: PersistentResourceRepositorySyncProgress,
+    progress: PersistentProjectRepositorySyncProgress,
 ) {
     val percentText = "${(progress.fraction * 100).roundToInt().coerceIn(0, 100)}%"
     Column(
@@ -2227,7 +2224,7 @@ private fun LogsScreen(
         subtitle = state.runtimeState.lastMessage.ifBlank { state.lastMessage },
         modifier = Modifier.fillMaxSize(),
         metrics = listOf(
-            FrameworkLogMetric(label = "阶段", value = state.runtimeState.phase.displayName()),
+            FrameworkLogMetric(label = "阶段", value = state.runtimeState.phase.displayName(RunSessionPhaseText.Chinese)),
             FrameworkLogMetric(label = "当前任务", value = currentTaskLabel ?: state.runtimeState.currentTaskId ?: "-"),
             FrameworkLogMetric(label = "日志级别", value = state.settings.logLevel),
         ),
@@ -2333,7 +2330,7 @@ private fun buildTaskStatusLogLines(
     entries += UiLogLine(
         time = null,
         level = UiLogLevel.Info,
-        content = "运行阶段：${runtimeState.phase.displayName()}",
+        content = "运行阶段：${runtimeState.phase.displayName(RunSessionPhaseText.Chinese)}",
     )
 
     val runtimeMessage = translateRuntimeStateMessage(
@@ -2395,15 +2392,6 @@ private fun classifyUiLogLevel(message: String): UiLogLevel {
         "debug" in lower || "trace" in lower || "verbose" in lower -> UiLogLevel.Debug
         else -> UiLogLevel.Debug
     }
-}
-
-private fun RunSessionPhase.displayName(): String = when (this) {
-    RunSessionPhase.Idle -> "待命"
-    RunSessionPhase.Preparing -> "准备中"
-    RunSessionPhase.Running -> "运行中"
-    RunSessionPhase.Stopping -> "停止中"
-    RunSessionPhase.Completed -> "已完成"
-    RunSessionPhase.Failed -> "已失败"
 }
 
 private fun translateRuntimeStateMessage(
@@ -2933,22 +2921,26 @@ private fun taskConfigControlTextStyle(): TextStyle {
     return MaterialTheme.typography.labelSmall
 }
 
-private fun resourceRepositorySummary(status: PersistentResourceRepositoryStatus): String {
-    return when {
-        status.available -> buildString {
-            append("GitHub / ")
-            append(status.branch)
-            status.modelRevision?.takeIf { it.isNotBlank() }?.let {
-                append(" / AI ")
-                append(it.take(7))
-            }
-            if (status.updatedAt > 0L) {
-                append(" / ")
-                append(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(status.updatedAt)))
-            }
-        }
-        status.lastError.isNullOrBlank() -> "尚未下载，首次启动会同步 MaaEnd 资源"
-        else -> "GitHub 更新失败，请重新同步 MaaEnd 资源"
+private fun resourceRepositorySummary(status: PersistentProjectRepositoryStatus): String {
+    val readyText = status.updatedAt.takeIf { it > 0L }
+        ?.let { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it)) }
+        ?: "已就绪"
+    return status.summaryText(
+        repositoryLabel = "GitHub",
+        branchLabel = status.branch ?: "v2",
+        readyText = readyText,
+        notDownloadedText = "尚未下载，首次启动会同步 MaaEnd 资源",
+        failedText = "GitHub 更新失败，请重新同步 MaaEnd 资源",
+    )
+}
+
+private fun String.logLevelLabel(): String {
+    return when (this) {
+        MaaLogLevels.ERROR -> "错误"
+        MaaLogLevels.WARN -> "警告"
+        MaaLogLevels.INFO -> "信息"
+        MaaLogLevels.DEBUG -> "调试"
+        else -> this
     }
 }
 
@@ -2965,18 +2957,6 @@ private fun buildCapabilitiesLabel(runtimeState: RuntimeStateSnapshot): String {
             append("maafw")
         }
         if (isEmpty()) append("基础能力")
-    }
-}
-
-private fun canStopRun(runtimeState: RuntimeStateSnapshot): Boolean {
-    return when (runtimeState.phase) {
-        RunSessionPhase.Preparing,
-        RunSessionPhase.Running,
-        RunSessionPhase.Stopping -> true
-
-        RunSessionPhase.Idle,
-        RunSessionPhase.Completed,
-        RunSessionPhase.Failed -> false
     }
 }
 
@@ -3064,19 +3044,11 @@ private fun UiLogLevel.isVisibleAt(selectedLogLevel: String): Boolean {
 }
 
 private fun maxVisibleUiLogPriority(selectedLogLevel: String): Int {
-    return when (normalizeUiSelectedLogLevel(selectedLogLevel)) {
-        "error" -> UiLogLevel.Error.priority
-        "warn" -> UiLogLevel.Warning.priority
-        "debug" -> UiLogLevel.Debug.priority
+    return when (MaaLogLevels.normalize(selectedLogLevel)) {
+        MaaLogLevels.ERROR -> UiLogLevel.Error.priority
+        MaaLogLevels.WARN -> UiLogLevel.Warning.priority
+        MaaLogLevels.DEBUG -> UiLogLevel.Debug.priority
         else -> UiLogLevel.Info.priority
-    }
-}
-
-private fun normalizeUiSelectedLogLevel(selectedLogLevel: String?): String {
-    val normalized = selectedLogLevel?.trim()?.lowercase()
-    return when (normalized) {
-        "error", "warn", "info", "debug" -> normalized
-        else -> "info"
     }
 }
 
@@ -3257,7 +3229,8 @@ private fun loadCatalogAssetBytes(context: Context, rawPath: String): ByteArray?
         return null
     }
 
-    val repoRoot = PersistentResourceRepositoryManager.loadStatus(context).rootPath
+    val manifest = MaaProjectManifestLoader.loadOrDefault(context.assets)
+    val repoRoot = PersistentProjectRepositoryManager.loadStatus(context, manifest).rootPath
     if (!repoRoot.isNullOrBlank()) {
         val repoFile = File(repoRoot, normalizedPath)
         if (repoFile.isFile) {

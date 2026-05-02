@@ -11,7 +11,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.maaend.android.ui.MaaEndApp
 import com.maaend.android.ui.MainViewModel
-import com.maaframework.android.model.RunSessionPhase
+import com.maaframework.android.model.shouldKeepScreenOn
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -29,11 +29,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mainViewModel.uiState.collect { state ->
-                    val keepScreenOn = state.runtimeState.phase in setOf(
-                        RunSessionPhase.Preparing,
-                        RunSessionPhase.Running,
-                        RunSessionPhase.Stopping,
-                    ) || state.runtimeState.displayPowerOffActive
+                    val keepScreenOn = state.runtimeState.shouldKeepScreenOn()
 
                     if (keepScreenOn) {
                         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

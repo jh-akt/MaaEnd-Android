@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.maaframework.android.catalog.InterfaceCatalogLoader
 import com.maaframework.android.model.CatalogSnapshot
+import com.maaframework.android.model.MaaLogLevels
 import com.maaframework.android.model.ResourceDescriptor
 import com.maaframework.android.model.RunRequest
 import com.maaframework.android.model.RuntimeLogChunk
@@ -18,11 +19,11 @@ import com.maaframework.android.model.TaskDescriptor
 import com.maaframework.android.model.TaskOptionDescriptor
 import com.maaframework.android.model.TaskOptionType
 import com.maaframework.android.project.MaaProjectManifestLoader
+import com.maaframework.android.runtime.PersistentProjectRepositoryManager
+import com.maaframework.android.runtime.PersistentProjectRepositoryStatus
+import com.maaframework.android.runtime.PersistentProjectRepositorySyncProgress
 import com.maaframework.android.session.MaaFrameworkSession
 import com.maaframework.android.session.MaaRuntimeClient
-import com.maaend.android.runtime.PersistentResourceRepositoryManager
-import com.maaend.android.runtime.PersistentResourceRepositorySyncProgress
-import com.maaend.android.runtime.PersistentResourceRepositoryStatus
 import com.maaend.android.storage.AppSettings
 import com.maaend.android.storage.AppSettingsRepository
 import kotlinx.coroutines.Job
@@ -71,9 +72,9 @@ data class MainUiState(
     val taskInputValuesByTask: Map<String, Map<String, Map<String, String>>> = emptyMap(),
     val sharedOptionSelectionsByScope: Map<String, Map<String, Set<String>>> = emptyMap(),
     val sharedInputValuesByScope: Map<String, Map<String, Map<String, String>>> = emptyMap(),
-    val resourceRepository: PersistentResourceRepositoryStatus = PersistentResourceRepositoryStatus(),
+    val resourceRepository: PersistentProjectRepositoryStatus = PersistentProjectRepositoryStatus(),
     val resourceRepositoryUpdating: Boolean = false,
-    val resourceRepositoryProgress: PersistentResourceRepositorySyncProgress? = null,
+    val resourceRepositoryProgress: PersistentProjectRepositorySyncProgress? = null,
     val resourceRepositoryClearConfirmVisible: Boolean = false,
     val displayLogs: List<String> = emptyList(),
     val lastMessage: String = "",
@@ -121,7 +122,7 @@ class MainViewModel(
             }
         clearLegacyLogCache(application)
         var lastMessage = "Root 运行环境已就绪"
-        val resourceRepository = PersistentResourceRepositoryManager.loadStatus(application)
+        val resourceRepository = PersistentProjectRepositoryManager.loadStatus(application, manifest)
         val catalog = runCatching { loadCatalogSnapshot(resourceRepository) }
             .getOrElse { error ->
                 Log.e(TAG, "Failed to load interface catalog", error)
@@ -209,9 +210,10 @@ class MainViewModel(
     }
 
     fun updateLogLevel(logLevel: String) {
-        settingsRepository.saveLogLevel(logLevel)
+        val normalized = MaaLogLevels.normalize(logLevel)
+        settingsRepository.saveLogLevel(normalized)
         _uiState.value = _uiState.value.copy(
-            settings = _uiState.value.settings.copy(logLevel = logLevel),
+            settings = _uiState.value.settings.copy(logLevel = normalized),
         )
     }
 
@@ -338,7 +340,7 @@ class MainViewModel(
         _uiState.value = _uiState.value.copy(resourceRepositoryClearConfirmVisible = false)
         _uiState.value = _uiState.value.copy(
             resourceRepositoryUpdating = true,
-            resourceRepositoryProgress = PersistentResourceRepositorySyncProgress(
+            resourceRepositoryProgress = PersistentProjectRepositorySyncProgress(
                 fraction = 0f,
                 label = "准备同步 GitHub 资源",
             ),
@@ -348,14 +350,16 @@ class MainViewModel(
         val status = runCatching {
             withContext(Dispatchers.IO) {
                 if (force) {
-                    PersistentResourceRepositoryManager.updateFromGithub(
+                    PersistentProjectRepositoryManager.updateFromGithub(
                         context = application,
+                        manifest = manifest,
                         logger = { message -> Log.i(TAG, message) },
                         progress = ::updateResourceRepositoryProgress,
                     )
                 } else {
-                    PersistentResourceRepositoryManager.ensureAvailable(
+                    PersistentProjectRepositoryManager.ensureAvailable(
                         context = application,
+                        manifest = manifest,
                         logger = { message -> Log.i(TAG, message) },
                         progress = ::updateResourceRepositoryProgress,
                     )
@@ -363,7 +367,7 @@ class MainViewModel(
             }
         }.getOrElse { error ->
             Log.e(TAG, "Failed to sync GitHub resource repository", error)
-            PersistentResourceRepositoryManager.loadStatus(application).copy(
+            PersistentProjectRepositoryManager.loadStatus(application, manifest).copy(
                 lastError = error.message ?: error::class.java.simpleName,
             )
         }
@@ -389,7 +393,7 @@ class MainViewModel(
         }
         _uiState.value = _uiState.value.copy(
             resourceRepositoryUpdating = true,
-            resourceRepositoryProgress = PersistentResourceRepositorySyncProgress(
+            resourceRepositoryProgress = PersistentProjectRepositorySyncProgress(
                 fraction = 0f,
                 label = "正在清空 GitHub 资源缓存",
             ),
@@ -399,11 +403,11 @@ class MainViewModel(
         val application = getApplication<Application>()
         val status = runCatching {
             withContext(Dispatchers.IO) {
-                PersistentResourceRepositoryManager.clearLocalCache(application)
+                PersistentProjectRepositoryManager.clearLocalCache(application, manifest)
             }
         }.getOrElse { error ->
             Log.e(TAG, "Failed to clear GitHub resource repository cache", error)
-            PersistentResourceRepositoryManager.loadStatus(application).copy(
+            PersistentProjectRepositoryManager.loadStatus(application, manifest).copy(
                 lastError = error.message ?: error::class.java.simpleName,
             )
         }
@@ -422,16 +426,16 @@ class MainViewModel(
         )
     }
 
-    private fun updateResourceRepositoryProgress(progress: PersistentResourceRepositorySyncProgress) {
+    private fun updateResourceRepositoryProgress(progress: PersistentProjectRepositorySyncProgress) {
         _uiState.update { state ->
             state.copy(resourceRepositoryProgress = progress)
         }
     }
 
-    private fun loadCatalogSnapshot(resourceRepository: PersistentResourceRepositoryStatus): CatalogSnapshot {
+    private fun loadCatalogSnapshot(resourceRepository: PersistentProjectRepositoryStatus): CatalogSnapshot {
         val application = getApplication<Application>()
         return if (resourceRepository.available) {
-            catalogLoader.loadFromDirectory(PersistentResourceRepositoryManager.currentRoot(application))
+            catalogLoader.loadFromDirectory(PersistentProjectRepositoryManager.currentRoot(application, manifest))
         } else if (hasBundledCatalogAssets(application)) {
             catalogLoader.load()
         } else {
@@ -443,7 +447,7 @@ class MainViewModel(
         return runCatching { application.assets.open("interface.json").close() }.isSuccess
     }
 
-    private fun refreshCatalogSnapshot(resourceRepository: PersistentResourceRepositoryStatus) {
+    private fun refreshCatalogSnapshot(resourceRepository: PersistentProjectRepositoryStatus) {
         val catalog = runCatching { loadCatalogSnapshot(resourceRepository) }
             .getOrElse { error ->
                 Log.e(TAG, "Failed to reload catalog from current resource source", error)
