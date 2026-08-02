@@ -1,0 +1,95 @@
+name: Publish Android Runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag for the Android runtime
+        required: true
+        default: android-runtime-v1
+      maaend_ref:
+        description: MaaEnd branch, tag, or commit to build
+        required: true
+        default: v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-android-runtime
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    env:
+      ASSET_NAME: maaend-android-runtime-arm64-v8a.zip
+      NDK_VERSION: 27.2.12479018
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - name: Install Android NDK
+        run: sdkmanager "ndk;$NDK_VERSION"
+      - name: Fetch MaaEnd source
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/MaaEnd/MaaEnd.git upstream
+          git -C upstream fetch --depth 1 origin "${{ inputs.maaend_ref }}"
+          git -C upstream checkout --detach FETCH_HEAD
+      - name: Download verified MaaFramework runtime
+        run: |
+          mkdir -p generic
+          gh release download android-runtime-v1 \
+            --repo jh-akt/MaaFramework-Android \
+            --dir generic \
+            --pattern maaframework-android-runtime-arm64-v8a.zip \
+            --pattern maaframework-android-runtime-arm64-v8a.zip.sha256
+          (cd generic && sha256sum --check maaframework-android-runtime-arm64-v8a.zip.sha256)
+          unzip -q generic/maaframework-android-runtime-arm64-v8a.zip -d generic/runtime
+      - name: Build project-specific Android agents
+        run: |
+          python3 MaaFramework-Android/tools/prepare_android_runtime.py \
+            --project-root upstream \
+            --maafw-dir generic/runtime/maafw \
+            --output dist/runtime \
+            --android-api 30 \
+            --clear \
+            --skip-python-agent
+      - name: Validate Android arm64 binaries
+        run: |
+          test -f dist/runtime/agent/go-service
+          test -f dist/runtime/agent/maa-go-runner
+          find dist/runtime/maafw -name '*.so' -print -quit | grep -q .
+          for binary in dist/runtime/agent/go-service dist/runtime/agent/maa-go-runner; do
+            file "$binary" | grep -q 'ELF 64-bit.*ARM aarch64'
+            readelf -l "$binary" | grep -q '/system/bin/linker64'
+          done
+      - name: Package runtime and checksum
+        run: |
+          python3 MaaFramework-Android/tools/package_android_runtime.py \
+            --runtime-dir dist/runtime \
+            --output "dist/$ASSET_NAME"
+          (cd dist && sha256sum --check "$ASSET_NAME.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maaend-android-runtime-arm64-v8a
+          path: |
+            dist/${{ env.ASSET_NAME }}
+            dist/${{ env.ASSET_NAME }}.sha256
+          if-no-files-found: error
+      - name: Create or update GitHub Release
+        run: |
+          if ! gh release view "${{ inputs.tag }}" >/dev/null 2>&1; then
+            gh release create "${{ inputs.tag }}" \
+              --title "MaaEnd Android Runtime ${{ inputs.tag }}" \
+              --notes "Android API 30 arm64-v8a runtime built from MaaEnd ${{ inputs.maaend_ref }}."
+          fi
+          gh release upload "${{ inputs.tag }}" \
+            "dist/$ASSET_NAME" \
+            "dist/$ASSET_NAME.sha256" \
+            --clobber

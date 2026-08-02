@@ -1,5 +1,4 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import org.gradle.api.tasks.Sync
 import java.util.Properties
 
 plugins {
@@ -7,11 +6,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.maaframework.android.host-application")
 }
 
-val runtimeDir = rootProject.layout.projectDirectory.dir("runtime")
-val generatedAssetsDir = layout.buildDirectory.dir("generated/assets")
-val generatedJniLibsDir = layout.buildDirectory.dir("generated/jniLibs")
 val signingPropertiesFile = rootProject.file("key.properties")
 val signingProperties = Properties().apply {
     if (signingPropertiesFile.exists()) {
@@ -19,17 +16,12 @@ val signingProperties = Properties().apply {
     }
 }
 
-val prepareBundledRuntimeAssets by tasks.registering(Sync::class) {
-    from(runtimeDir)
-    into(generatedAssetsDir.map { it.dir("bundled_runtime") })
-    includeEmptyDirs = true
-}
-
-val prepareBundledRuntimeJniLibs by tasks.registering(Sync::class) {
-    from(runtimeDir.dir("maafw"))
-    into(generatedJniLibsDir.map { it.dir("arm64-v8a") })
-    include("*.so")
-    includeEmptyDirs = false
+maaRuntime {
+    localDirectory.set("runtime")
+    releaseRepo.set("jh-akt/MaaEnd-Android")
+    releaseTag.set("android-runtime-v1")
+    releaseAsset.set("maaend-android-runtime-arm64-v8a.zip")
+    requireMaaFramework.set(false)
 }
 
 android {
@@ -89,12 +81,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets.getByName("main").assets.srcDirs(
-        "src/main/assets",
-        generatedAssetsDir,
-    )
-    sourceSets.getByName("main").jniLibs.srcDirs(generatedJniLibsDir)
-
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -113,13 +99,9 @@ kotlin {
     }
 }
 
-tasks.named("preBuild") {
-    dependsOn(prepareBundledRuntimeAssets)
-    dependsOn(prepareBundledRuntimeJniLibs)
-}
-
 dependencies {
     implementation(project(":framework"))
+    implementation(project(":framework-host"))
     implementation(project(":framework-ui"))
 
     implementation("androidx.core:core-ktx:1.17.0")

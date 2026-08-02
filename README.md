@@ -6,7 +6,7 @@
 
 `MaaEnd Android` 是一个面向已 Root Android 设备的 `MaaEnd` 宿主应用。它负责在手机上准备运行时、拉起 Root Runtime、同步上游任务资源、展示预览与日志，并直接执行 `MaaEnd` 任务。
 
-当前公开版本：`1.0.2`
+当前工程版本：`1.0.4`
 
 ## 项目定位
 
@@ -70,13 +70,15 @@
 
 ## 快速开始
 
-### 1. 准备运行时文件
+### 1. 准备运行时
 
-构建前需要准备这些运行时内容：
+本地构建默认读取 `runtime/`，也可以通过 `maafwRuntimeDir` 或 `maafwRuntimeUrl` 覆盖。正式专用 Runtime 由 GitHub Actions 的 `Publish Android Runtime` 手动工作流生成并发布，包含：
 
 - `runtime/agent/go-service`
 - `runtime/agent/maa-go-runner`
 - `runtime/maafw/`
+
+工作流会从 MaaEnd 上游构建 Android API 30 / arm64 agent，合并已校验的 MaaFramework `.so`，验证 ELF interpreter 为 `/system/bin/linker64`，并发布 zip 与 `.sha256`。
 
 其中：
 
@@ -86,8 +88,8 @@
 ### 2. 编译 APK
 
 ```bash
-./gradlew assembleDebug
-./gradlew assembleRelease
+./gradlew :app:assembleDebug :app:testDebugUnitTest
+./gradlew :app:assembleRelease
 ```
 
 默认产物位置：
@@ -109,7 +111,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 仓库结构
 
-- `app/`：Android 应用、Root Runtime 桥接、Compose UI、AIDL 和测试
+- `app/`：应用品牌、清单、ViewModel 适配与 MaaEnd 特有策略；通用 Root/宿主 UI 来自框架 submodule
+- `MaaFramework-Android/`：Git submodule，提供 `framework`、`framework-host`、`framework-ui` 和 Runtime Gradle 插件
 - `runtime/`：随 APK 一起打包或运行前准备的 Android 运行时二进制
 - `tools/`：运行时准备脚本和 `go-runner`
 - `docs/`：开发记录、排障文档和发布素材

@@ -1,4 +1,5 @@
 pluginManagement {
+    includeBuild("MaaFramework-Android/build-logic")
     repositories {
         google()
         mavenCentral()
@@ -19,6 +20,9 @@ rootProject.name = "MaaEndAndroid"
 
 include(":framework")
 project(":framework").projectDir = file("MaaFramework-Android/framework")
+
+include(":framework-host")
+project(":framework-host").projectDir = file("MaaFramework-Android/framework-host")
 
 include(":framework-ui")
 project(":framework-ui").projectDir = file("MaaFramework-Android/framework-ui")

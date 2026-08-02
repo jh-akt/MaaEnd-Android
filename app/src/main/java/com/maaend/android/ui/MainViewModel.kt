@@ -184,6 +184,14 @@ class MainViewModel(
         _uiState.value = _uiState.value.copy(selectedTaskId = taskId)
     }
 
+    fun selectPreset(presetId: String) {
+        settingsRepository.saveLastPresetId(presetId)
+        _uiState.value = _uiState.value.copy(
+            selectedPresetId = presetId,
+            settings = _uiState.value.settings.copy(lastSelectedPresetId = presetId),
+        )
+    }
+
     fun selectResource(resourceId: String) {
         settingsRepository.saveSelectedResourceId(resourceId)
         val visibleTasks = visibleTasks(_uiState.value.catalog.tasks, resourceId)
@@ -321,6 +329,44 @@ class MainViewModel(
             sequenceTaskIds = sequenceTaskIds,
             resourceName = selectedResource?.id ?: "官服",
             logLevel = _uiState.value.settings.logLevel,
+            optionOverridesJson = overridesByTask[tasks.first().id],
+            optionOverridesByTask = overridesByTask,
+        )
+        startRun(request)
+    }
+
+    fun startSelectedPreset() {
+        val state = _uiState.value
+        val preset = state.catalog.presets.firstOrNull { it.id == state.selectedPresetId }
+        if (preset == null) {
+            _uiState.value = state.copy(lastMessage = "请先选择一个预设")
+            return
+        }
+        val selectedResource = selectedResource()
+        val availableTasks = visibleTasks(state.catalog.tasks, selectedResource?.id)
+        val requestedTasks = preset.taskIds.mapNotNull { taskId ->
+            availableTasks.firstOrNull { it.id == taskId }
+        }
+        val tasks = ProjectInterfaceSupport.ensureOpenGameFirst(
+            tasks = requestedTasks,
+            availableTasks = availableTasks,
+        )
+        if (tasks.isEmpty()) {
+            _uiState.value = state.copy(lastMessage = "预设 ${preset.label} 没有当前资源可执行的任务")
+            return
+        }
+        val validationError = validateSelections(tasks, selectedResource)
+        if (validationError != null) {
+            _uiState.value = state.copy(lastMessage = validationError)
+            return
+        }
+        val overridesByTask = buildOptionOverridesByTask(tasks, selectedResource)
+        val request = RunRequest(
+            taskId = tasks.first().id,
+            presetId = preset.id,
+            sequenceTaskIds = tasks.map { it.id },
+            resourceName = selectedResource?.id ?: "官服",
+            logLevel = state.settings.logLevel,
             optionOverridesJson = overridesByTask[tasks.first().id],
             optionOverridesByTask = overridesByTask,
         )
