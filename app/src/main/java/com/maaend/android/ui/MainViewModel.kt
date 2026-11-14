@@ -133,7 +133,7 @@ class MainViewModel(
             selectedPresetId = settings.lastSelectedPresetId ?: catalog.presets.firstOrNull()?.id,
             checkedTaskIds = settings.checkedTaskIds.ifEmpty {
                 setOfNotNull(selectedTaskId)
-            }.filterTo(linkedSetOf()) { taskId -> catalog.tasks.any { it.id == taskId } },
+            }.filterTo(linkedSetOf()) { taskId -> catalog.tasks.any { it.id == taskId && it.controllerSupported } },
             taskOptionSelectionsByTask = mergeStoredOptionSelections(catalog.tasks, settings.taskOptionSelectionsByTask),
             taskInputValuesByTask = mergeStoredInputValues(catalog.tasks, settings.taskInputValuesByTask),
             sharedOptionSelectionsByScope = mergeStoredOptionSelectionsByScope(catalog, settings.sharedOptionSelectionsByScope),
@@ -184,6 +184,7 @@ class MainViewModel(
     }
 
     fun toggleTaskChecked(taskId: String, checked: Boolean) {
+        if (checked && _uiState.value.catalog.tasks.any { it.id == taskId && !it.controllerSupported }) return
         val updated = _uiState.value.checkedTaskIds.toMutableSet().apply {
             if (checked) {
                 add(taskId)
@@ -817,9 +818,7 @@ class MainViewModel(
         tasks: List<TaskDescriptor>,
         resourceId: String?,
     ): List<TaskDescriptor> {
-        return tasks.filter { task ->
-            ProjectInterfaceSupport.taskSupportsResource(task, resourceId)
-        }
+        return com.maaframework.android.catalog.TaskOptionSupport.visibleTasks(tasks, resourceId)
     }
 
     private fun setBusy(busy: Boolean, message: String) {
@@ -841,7 +840,7 @@ class MainViewModel(
             selectedPresetId = settings.lastSelectedPresetId ?: catalog.presets.firstOrNull()?.id,
             checkedTaskIds = settings.checkedTaskIds.ifEmpty {
                 setOfNotNull(selectedTaskId)
-            }.filterTo(linkedSetOf()) { taskId -> catalog.tasks.any { it.id == taskId } },
+            }.filterTo(linkedSetOf()) { taskId -> catalog.tasks.any { it.id == taskId && it.controllerSupported } },
             taskOptionSelectionsByTask = mergeStoredOptionSelections(catalog.tasks, settings.taskOptionSelectionsByTask),
             taskInputValuesByTask = mergeStoredInputValues(catalog.tasks, settings.taskInputValuesByTask),
             sharedOptionSelectionsByScope = mergeStoredOptionSelectionsByScope(catalog, settings.sharedOptionSelectionsByScope),
@@ -1089,6 +1088,7 @@ class MainViewModel(
         tasks: List<TaskDescriptor>,
         resource: ResourceDescriptor?,
     ): String? {
+        com.maaframework.android.catalog.TaskOptionSupport.unsupportedTaskMessage(tasks)?.let { return it }
         val resourceId = resource?.id
         val globalErrors = ProjectInterfaceSupport.collectInputValidationErrors(
             options = ProjectInterfaceSupport.filterOptionsForResource(_uiState.value.catalog.globalOptions, resourceId),
