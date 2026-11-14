@@ -1,11 +1,11 @@
 package com.maaend.android.ui
 
 import android.app.Application
-import android.content.BroadcastReceiver
-import android.content.Intent
-import android.content.IntentFilter
 import android.util.Log
 import android.view.Surface
+import com.maaframework.android.catalog.MaaOptionOverrides.buildOptionOverride
+import com.maaframework.android.catalog.MaaOptionOverrides.mergeOverrideJson
+import com.maaframework.android.host.MaaDisplayPowerRecovery
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.maaframework.android.catalog.InterfaceCatalogLoader
@@ -35,15 +35,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.put
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.File
@@ -84,7 +75,6 @@ data class MainUiState(
 class MainViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val manifest = MaaProjectManifestLoader.loadOrDefault(application.assets)
     private val catalogLoader = InterfaceCatalogLoader(application.assets, manifest.supportedControllers)
     private val settingsRepository = AppSettingsRepository(application)
@@ -98,20 +88,8 @@ class MainViewModel(
     private var connectJob: Job? = null
     private var previewSurface: Surface? = null
     private var logCursor: Long = 0L
-    private val inputPlaceholderRegex = Regex("\\{([A-Za-z0-9_]+)\\}")
-    private var screenOnReceiverRegistered = false
-    private val screenOnReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: android.content.Context?, intent: Intent?) {
-            if (intent?.action != Intent.ACTION_SCREEN_ON) {
-                return
-            }
-            if (!_uiState.value.runtimeState.displayPowerOffActive) {
-                return
-            }
-            viewModelScope.launch {
-                restoreDisplayPowerAfterScreenOn()
-            }
-        }
+    private val displayPowerRecovery = MaaDisplayPowerRecovery(application, viewModelScope) {
+        _uiState.update { it.copy(lastMessage = "检测到亮屏，已退出息屏挂机") }
     }
 
     init {
@@ -147,7 +125,7 @@ class MainViewModel(
         val selectedTaskId = settings.lastSelectedTaskId
             ?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
             ?: visibleTasks.firstOrNull()?.id
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             catalog = catalog,
             settings = settings,
             selectedResourceId = selectedResourceId,
@@ -164,7 +142,7 @@ class MainViewModel(
             rootAvailable = rootAvailable,
             rootGranted = rootGranted,
             lastMessage = lastMessage,
-        )
+        ) }
         if (!resourceRepository.available) {
             viewModelScope.launch {
                 syncPersistentResourceRepository(force = false, silent = true)
@@ -176,20 +154,20 @@ class MainViewModel(
     }
 
     fun selectTab(tab: MaaEndTab) {
-        _uiState.value = _uiState.value.copy(activeTab = tab)
+        _uiState.update { current -> current.copy(activeTab = tab) }
     }
 
     fun selectTask(taskId: String) {
         settingsRepository.saveLastTaskId(taskId)
-        _uiState.value = _uiState.value.copy(selectedTaskId = taskId)
+        _uiState.update { current -> current.copy(selectedTaskId = taskId) }
     }
 
     fun selectPreset(presetId: String) {
         settingsRepository.saveLastPresetId(presetId)
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             selectedPresetId = presetId,
-            settings = _uiState.value.settings.copy(lastSelectedPresetId = presetId),
-        )
+            settings = current.settings.copy(lastSelectedPresetId = presetId),
+        ) }
     }
 
     fun selectResource(resourceId: String) {
@@ -199,10 +177,10 @@ class MainViewModel(
             ?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
             ?: visibleTasks.firstOrNull()?.id
         selectedTaskId?.let(settingsRepository::saveLastTaskId)
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             selectedResourceId = resourceId,
             selectedTaskId = selectedTaskId,
-        )
+        ) }
     }
 
     fun toggleTaskChecked(taskId: String, checked: Boolean) {
@@ -214,27 +192,27 @@ class MainViewModel(
             }
         }
         settingsRepository.saveCheckedTaskIds(updated)
-        _uiState.value = _uiState.value.copy(checkedTaskIds = updated)
+        _uiState.update { current -> current.copy(checkedTaskIds = updated) }
     }
 
     fun updateLogLevel(logLevel: String) {
         val normalized = MaaLogLevels.normalize(logLevel)
         settingsRepository.saveLogLevel(normalized)
-        _uiState.value = _uiState.value.copy(
-            settings = _uiState.value.settings.copy(logLevel = normalized),
-        )
+        _uiState.update { current -> current.copy(
+            settings = current.settings.copy(logLevel = normalized),
+        ) }
     }
 
     fun exportConfig(outputStream: OutputStream) {
         viewModelScope.launch {
             runCatching { settingsRepository.exportTo(outputStream) }
                 .onSuccess {
-                    _uiState.value = _uiState.value.copy(lastMessage = "配置已导出")
+                    _uiState.update { current -> current.copy(lastMessage = "配置已导出") }
                 }
                 .onFailure { error ->
-                    _uiState.value = _uiState.value.copy(
+                    _uiState.update { current -> current.copy(
                         lastMessage = "导出配置失败：${error.message ?: error::class.java.simpleName}",
-                    )
+                    ) }
                 }
         }
     }
@@ -244,12 +222,12 @@ class MainViewModel(
             runCatching { settingsRepository.importFrom(inputStream) }
                 .onSuccess { importedSettings ->
                     applyLoadedSettings(importedSettings)
-                    _uiState.value = _uiState.value.copy(lastMessage = "配置已导入")
+                    _uiState.update { current -> current.copy(lastMessage = "配置已导入") }
                 }
                 .onFailure { error ->
-                    _uiState.value = _uiState.value.copy(
+                    _uiState.update { current -> current.copy(
                         lastMessage = "导入配置失败：${error.message ?: error::class.java.simpleName}",
-                    )
+                    ) }
                 }
         }
     }
@@ -270,12 +248,12 @@ class MainViewModel(
             }
 
             setBusy(true, "准备运行时中")
-            val prepared = runCatching { runtimeService.prepareRuntime() }.getOrDefault(false)
+            val prepared = withContext(Dispatchers.IO) { runCatching { runtimeService.prepareRuntime() } }.getOrDefault(false)
             refreshRuntimeState()
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { current -> current.copy(
                 busy = false,
-                lastMessage = if (prepared) "运行时已准备完成" else "运行时准备失败",
-            )
+                lastMessage = if (prepared) "运行时准备请求已提交" else "运行时准备失败",
+            ) }
         }
     }
 
@@ -289,11 +267,11 @@ class MainViewModel(
         if (_uiState.value.resourceRepositoryUpdating) {
             return
         }
-        _uiState.value = _uiState.value.copy(resourceRepositoryClearConfirmVisible = true)
+        _uiState.update { current -> current.copy(resourceRepositoryClearConfirmVisible = true) }
     }
 
     fun dismissClearResourceRepositoryConfirmation() {
-        _uiState.value = _uiState.value.copy(resourceRepositoryClearConfirmVisible = false)
+        _uiState.update { current -> current.copy(resourceRepositoryClearConfirmVisible = false) }
     }
 
     fun clearResourceRepository() {
@@ -319,7 +297,7 @@ class MainViewModel(
         )
         val validationError = validateSelections(tasks, selectedResource)
         if (validationError != null) {
-            _uiState.value = _uiState.value.copy(lastMessage = validationError)
+            _uiState.update { current -> current.copy(lastMessage = validationError) }
             return
         }
         val overridesByTask = buildOptionOverridesByTask(tasks, selectedResource)
@@ -339,7 +317,7 @@ class MainViewModel(
         val state = _uiState.value
         val preset = state.catalog.presets.firstOrNull { it.id == state.selectedPresetId }
         if (preset == null) {
-            _uiState.value = state.copy(lastMessage = "请先选择一个预设")
+            _uiState.update { current -> current.copy(lastMessage = "请先选择一个预设") }
             return
         }
         val selectedResource = selectedResource()
@@ -352,12 +330,12 @@ class MainViewModel(
             availableTasks = availableTasks,
         )
         if (tasks.isEmpty()) {
-            _uiState.value = state.copy(lastMessage = "预设 ${preset.label} 没有当前资源可执行的任务")
+            _uiState.update { current -> current.copy(lastMessage = "预设 ${preset.label} 没有当前资源可执行的任务") }
             return
         }
         val validationError = validateSelections(tasks, selectedResource)
         if (validationError != null) {
-            _uiState.value = state.copy(lastMessage = validationError)
+            _uiState.update { current -> current.copy(lastMessage = validationError) }
             return
         }
         val overridesByTask = buildOptionOverridesByTask(tasks, selectedResource)
@@ -383,15 +361,15 @@ class MainViewModel(
         if (_uiState.value.resourceRepositoryUpdating) {
             return
         }
-        _uiState.value = _uiState.value.copy(resourceRepositoryClearConfirmVisible = false)
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(resourceRepositoryClearConfirmVisible = false) }
+        _uiState.update { current -> current.copy(
             resourceRepositoryUpdating = true,
             resourceRepositoryProgress = PersistentProjectRepositorySyncProgress(
                 fraction = 0f,
                 label = "准备同步 GitHub 资源",
             ),
-            lastMessage = if (silent) _uiState.value.lastMessage else "正在同步 GitHub 资源仓库",
-        )
+            lastMessage = if (silent) current.lastMessage else "正在同步 GitHub 资源仓库",
+        ) }
         val application = getApplication<Application>()
         val status = runCatching {
             withContext(Dispatchers.IO) {
@@ -425,19 +403,19 @@ class MainViewModel(
             else -> "GitHub 资源同步失败：${status.lastError ?: "未知错误"}"
         }
         refreshCatalogSnapshot(status)
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             resourceRepository = status,
             resourceRepositoryUpdating = false,
             resourceRepositoryProgress = null,
             lastMessage = nextMessage,
-        )
+        ) }
     }
 
     private suspend fun clearPersistentResourceRepository() {
         if (_uiState.value.resourceRepositoryUpdating) {
             return
         }
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             resourceRepositoryUpdating = true,
             resourceRepositoryProgress = PersistentProjectRepositorySyncProgress(
                 fraction = 0f,
@@ -445,7 +423,7 @@ class MainViewModel(
             ),
             resourceRepositoryClearConfirmVisible = false,
             lastMessage = "正在清空 GitHub 资源缓存",
-        )
+        ) }
         val application = getApplication<Application>()
         val status = runCatching {
             withContext(Dispatchers.IO) {
@@ -464,12 +442,12 @@ class MainViewModel(
             "清空 GitHub 资源失败：${status.lastError}"
         }
         refreshCatalogSnapshot(status)
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             resourceRepository = status,
             resourceRepositoryUpdating = false,
             resourceRepositoryProgress = null,
             lastMessage = nextMessage,
-        )
+        ) }
     }
 
     private fun updateResourceRepositoryProgress(progress: PersistentProjectRepositorySyncProgress) {
@@ -509,18 +487,18 @@ class MainViewModel(
             ?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
             ?: settings.lastSelectedTaskId?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
             ?: visibleTasks.firstOrNull()?.id
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             catalog = catalog,
             selectedResourceId = selectedResourceId,
             selectedTaskId = selectedTaskId,
-            checkedTaskIds = _uiState.value.checkedTaskIds.filterTo(linkedSetOf()) { taskId ->
+            checkedTaskIds = current.checkedTaskIds.filterTo(linkedSetOf()) { taskId ->
                 catalog.tasks.any { it.id == taskId }
             },
-            taskOptionSelectionsByTask = mergeStoredOptionSelections(catalog.tasks, _uiState.value.taskOptionSelectionsByTask),
-            taskInputValuesByTask = mergeStoredInputValues(catalog.tasks, _uiState.value.taskInputValuesByTask),
-            sharedOptionSelectionsByScope = mergeStoredOptionSelectionsByScope(catalog, _uiState.value.sharedOptionSelectionsByScope),
-            sharedInputValuesByScope = mergeStoredInputValuesByScope(catalog, _uiState.value.sharedInputValuesByScope),
-        )
+            taskOptionSelectionsByTask = mergeStoredOptionSelections(catalog.tasks, current.taskOptionSelectionsByTask),
+            taskInputValuesByTask = mergeStoredInputValues(catalog.tasks, current.taskInputValuesByTask),
+            sharedOptionSelectionsByScope = mergeStoredOptionSelectionsByScope(catalog, current.sharedOptionSelectionsByScope),
+            sharedInputValuesByScope = mergeStoredInputValuesByScope(catalog, current.sharedInputValuesByScope),
+        ) }
     }
 
     fun toggleTaskCheckboxOption(taskId: String, optionId: String, caseName: String) {
@@ -541,9 +519,9 @@ class MainViewModel(
         val updatedTaskInputs = currentTaskInputs + (optionId to (currentOptionInputs + (inputName to value)))
         val updatedAllInputs = _uiState.value.taskInputValuesByTask + (taskId to updatedTaskInputs)
         settingsRepository.saveTaskInputValuesByTask(updatedAllInputs)
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             taskInputValuesByTask = updatedAllInputs,
-        )
+        ) }
     }
 
     fun updateSharedSwitchOption(scopeId: String, optionId: String, caseName: String) {
@@ -570,14 +548,14 @@ class MainViewModel(
         val updatedScopeInputs = currentScopeInputs + (optionId to (currentOptionInputs + (inputName to value)))
         val updatedAllInputs = _uiState.value.sharedInputValuesByScope + (scopeId to updatedScopeInputs)
         settingsRepository.saveSharedInputValuesByScope(updatedAllInputs)
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             sharedInputValuesByScope = updatedAllInputs,
-        )
+        ) }
     }
 
     fun stopRun() {
         viewModelScope.launch {
-            runCatching { service?.stopRun() }
+            withContext(Dispatchers.IO) { runCatching { service?.stopRun() } }
             refreshRuntimeState()
         }
     }
@@ -586,25 +564,25 @@ class MainViewModel(
         viewModelScope.launch {
             val runtimeService = requireRuntimeService() ?: return@launch
             val turnOn = _uiState.value.runtimeState.displayPowerOffActive
-            val changed = runCatching { runtimeService.setDisplayPower(turnOn) }.getOrDefault(false)
+            val changed = withContext(Dispatchers.IO) { runCatching { runtimeService.setDisplayPower(turnOn) } }.getOrDefault(false)
             refreshRuntimeState()
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { current -> current.copy(
                 lastMessage = when {
                     !changed -> "息屏挂机切换失败"
                     turnOn -> "已恢复亮屏"
                     else -> "已进入息屏挂机，按电源键可唤醒"
                 },
-            )
+            ) }
         }
     }
 
     fun exportDiagnostics() {
         viewModelScope.launch {
             val runtimeService = requireRuntimeService() ?: return@launch
-            val path = runCatching { runtimeService.exportDiagnostics().orEmpty() }.getOrElse { "" }
+            val path = withContext(Dispatchers.IO) { runCatching { runtimeService.exportDiagnostics().orEmpty() } }.getOrElse { "" }
             refreshRuntimeState()
             if (path.isNotBlank()) {
-                _uiState.value = _uiState.value.copy(lastMessage = "诊断包已导出：$path")
+                _uiState.update { current -> current.copy(lastMessage = "诊断包已导出：$path") }
             }
         }
     }
@@ -618,12 +596,12 @@ class MainViewModel(
     fun startWindowedGame() {
         viewModelScope.launch {
             val runtimeService = requireRuntimeService() ?: return@launch
-            val ok = runCatching { runtimeService.startWindowedGame(_uiState.value.selectedResourceId) }.getOrDefault(false)
+            val ok = withContext(Dispatchers.IO) { runCatching { runtimeService.startWindowedGame(_uiState.value.selectedResourceId) } }.getOrDefault(false)
             refreshRuntimeState()
-            _uiState.value = _uiState.value.copy(
-                lastMessage = if (ok) "已在应用内拉起窗口模式" else "窗口模式启动失败",
+            _uiState.update { current -> current.copy(
+                lastMessage = if (ok) "窗口启动请求已提交" else "窗口模式启动失败",
                 activeTab = MaaEndTab.TASKS,
-            )
+            ) }
         }
     }
 
@@ -647,14 +625,14 @@ class MainViewModel(
         viewModelScope.launch {
             val runtimeService = requireRuntimeService() ?: return@launch
 
-            val started = runCatching {
-                runtimeService.startRun(request)
+            val started = withContext(Dispatchers.IO) {
+                runCatching { runtimeService.startRun(request) }
             }.getOrDefault(false)
             refreshRuntimeState()
-            _uiState.value = _uiState.value.copy(
-                lastMessage = if (started) "任务已开始执行" else "任务启动失败",
+            _uiState.update { current -> current.copy(
+                lastMessage = if (started) "任务请求已提交" else "任务启动失败",
                 activeTab = MaaEndTab.TASKS,
-            )
+            ) }
         }
     }
 
@@ -674,25 +652,29 @@ class MainViewModel(
             val polled = withContext(Dispatchers.IO) {
                 val state = runtimeService.getState()
                 val logChunk = runtimeService.readLogChunk(logCursor, LOG_CHUNK_LINES)
-                state to logChunk
+                Triple(state, logChunk, runtimeService.ping())
             }
-            val (state, logChunk) = polled
+            if (service !== runtimeService) return
+            val (state, logChunk, ping) = polled
             val displayLogs = mergeDisplayLogs(logChunk)
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { current -> current.copy(
                 runtimeState = state,
-                servicePing = runtimeService.ping(),
+                servicePing = ping,
                 displayLogs = displayLogs,
-            )
-            syncScreenOnReceiver(state.displayPowerOffActive)
-        }
-    }
-
-    private suspend fun restoreDisplayPowerAfterScreenOn() {
-        val runtimeService = service ?: return
-        val restored = runCatching { runtimeService.setDisplayPower(true) }.getOrDefault(false)
-        refreshRuntimeState()
-        if (restored) {
-            _uiState.value = _uiState.value.copy(lastMessage = "检测到亮屏，已退出息屏挂机")
+            ) }
+            displayPowerRecovery.observe(runtimeService, state)
+        }.onFailure { error ->
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            if (service !== runtimeService) return
+            session.disconnect(runtimeService)
+            service = null
+            displayPowerRecovery.observe(null, RuntimeStateSnapshot())
+            _uiState.update { current -> current.copy(
+                rootConnected = false,
+                busy = false,
+                servicePing = "",
+                lastMessage = "Runtime 连接已中断：${error.message}",
+            ) }
         }
     }
 
@@ -715,61 +697,63 @@ class MainViewModel(
     private suspend fun connectRootRuntime(silent: Boolean): MaaRuntimeClient? {
         currentAliveService()?.let { runtimeService ->
             if (!silent) {
-                _uiState.value = _uiState.value.copy(lastMessage = "Root Runtime 已连接")
+                _uiState.update { current -> current.copy(lastMessage = "Root Runtime 已连接") }
             }
             return runtimeService
         }
 
-        val rootAvailable = runCatching { session.isRootAvailable() }.getOrDefault(false)
-        _uiState.value = _uiState.value.copy(
+        val rootAvailable = withContext(Dispatchers.IO) { runCatching { session.isRootAvailable() } }.getOrDefault(false)
+        _uiState.update { current -> current.copy(
             busy = true,
             rootAvailable = rootAvailable,
             rootConnected = false,
             servicePing = "",
-        )
+        ) }
 
         if (!rootAvailable) {
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { current -> current.copy(
                 busy = false,
                 rootGranted = false,
                 rootConnected = false,
-                lastMessage = if (silent) _uiState.value.lastMessage else "未检测到可用 Root",
-            )
+                lastMessage = if (silent) current.lastMessage else "未检测到可用 Root",
+            ) }
             return null
         }
 
         val granted = session.requestRootPermission()
         if (!granted) {
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { current -> current.copy(
                 busy = false,
                 rootGranted = false,
                 rootConnected = false,
-                lastMessage = if (silent) _uiState.value.lastMessage else "Root 授权未通过",
-            )
+                lastMessage = if (silent) current.lastMessage else "Root 授权未通过",
+            ) }
             return null
         }
 
         val result = session.connectClient()
         return result.onSuccess { runtimeService ->
             service = runtimeService
-            previewSurface?.let { surface ->
-                runCatching { runtimeService.setMonitorSurface(surface) }
+            val surface = previewSurface
+            val ping = withContext(Dispatchers.IO) {
+                surface?.let { runCatching { runtimeService.setMonitorSurface(it) } }
+                runtimeService.ping()
             }
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { current -> current.copy(
                 busy = false,
                 rootAvailable = true,
                 rootGranted = true,
                 rootConnected = true,
-                servicePing = runtimeService.ping(),
+                servicePing = ping,
                 lastMessage = if (silent) {
                     "已静默获取 Root 并自动连接 Runtime"
                 } else {
                     "Root Runtime 已连接"
                 },
-            )
+            ) }
             startPolling()
         }.onFailure {
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { current -> current.copy(
                 busy = false,
                 rootAvailable = true,
                 rootGranted = true,
@@ -779,32 +763,32 @@ class MainViewModel(
                 } else {
                     "连接 Root Runtime 失败：${it.message}"
                 },
-            )
+            ) }
         }.getOrNull()
     }
 
     private suspend fun currentAliveService(): MaaRuntimeClient? {
         val existingService = service ?: return null
-        val ping = runCatching { existingService.ping() }.getOrNull()
+        val ping = withContext(Dispatchers.IO) { runCatching { existingService.ping() } }.getOrNull()
         if (!ping.isNullOrBlank()) {
             refreshRuntimeState()
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { current -> current.copy(
                 busy = false,
                 rootAvailable = true,
                 rootGranted = true,
                 rootConnected = true,
                 servicePing = ping,
-            )
+            ) }
             return existingService
         }
 
         session.disconnect(existingService)
         service = null
-        syncScreenOnReceiver(false)
-        _uiState.value = _uiState.value.copy(
+        displayPowerRecovery.observe(null, RuntimeStateSnapshot())
+        _uiState.update { current -> current.copy(
             rootConnected = false,
             servicePing = "",
-        )
+        ) }
         return null
     }
 
@@ -839,7 +823,7 @@ class MainViewModel(
     }
 
     private fun setBusy(busy: Boolean, message: String) {
-        _uiState.value = _uiState.value.copy(busy = busy, lastMessage = message)
+        _uiState.update { current -> current.copy(busy = busy, lastMessage = message) }
     }
 
     private fun applyLoadedSettings(settings: AppSettings) {
@@ -850,7 +834,7 @@ class MainViewModel(
             ?.takeIf { taskId -> visibleTasks.any { it.id == taskId } }
             ?: visibleTasks.firstOrNull()?.id
 
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { current -> current.copy(
             settings = settings,
             selectedResourceId = selectedResourceId,
             selectedTaskId = selectedTaskId,
@@ -862,29 +846,16 @@ class MainViewModel(
             taskInputValuesByTask = mergeStoredInputValues(catalog.tasks, settings.taskInputValuesByTask),
             sharedOptionSelectionsByScope = mergeStoredOptionSelectionsByScope(catalog, settings.sharedOptionSelectionsByScope),
             sharedInputValuesByScope = mergeStoredInputValuesByScope(catalog, settings.sharedInputValuesByScope),
-        )
+        ) }
     }
 
     override fun onCleared() {
         super.onCleared()
         pollJob?.cancel()
-        syncScreenOnReceiver(false)
-        runCatching { service?.setDisplayPower(true) }
-        runCatching { service?.stopWindowedPreview() }
+        displayPowerRecovery.close()
         previewSurface = null
         session.disconnect(service)
         service = null
-    }
-
-    private fun syncScreenOnReceiver(active: Boolean) {
-        val application = getApplication<Application>()
-        if (active && !screenOnReceiverRegistered) {
-            application.registerReceiver(screenOnReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
-            screenOnReceiverRegistered = true
-        } else if (!active && screenOnReceiverRegistered) {
-            runCatching { application.unregisterReceiver(screenOnReceiver) }
-            screenOnReceiverRegistered = false
-        }
     }
 
     private companion object {
@@ -1053,7 +1024,7 @@ class MainViewModel(
         val updated = transform(current).filterValues { it.isNotEmpty() }
         val updatedAllSelections = _uiState.value.taskOptionSelectionsByTask + (taskId to updated)
         settingsRepository.saveTaskOptionSelectionsByTask(updatedAllSelections)
-        _uiState.value = _uiState.value.copy(taskOptionSelectionsByTask = updatedAllSelections)
+        _uiState.update { current -> current.copy(taskOptionSelectionsByTask = updatedAllSelections) }
     }
 
     private fun updateSharedOptionSelections(
@@ -1066,7 +1037,7 @@ class MainViewModel(
         val updated = transform(current).filterValues { it.isNotEmpty() }
         val updatedAllSelections = _uiState.value.sharedOptionSelectionsByScope + (scopeId to updated)
         settingsRepository.saveSharedOptionSelectionsByScope(updatedAllSelections)
-        _uiState.value = _uiState.value.copy(sharedOptionSelectionsByScope = updatedAllSelections)
+        _uiState.update { current -> current.copy(sharedOptionSelectionsByScope = updatedAllSelections) }
     }
 
     private fun buildOptionOverridesByTask(
@@ -1112,66 +1083,6 @@ class MainViewModel(
             selectedByOption = _uiState.value.taskOptionSelectionsByTask[task.id].orEmpty(),
             inputValuesByOption = _uiState.value.taskInputValuesByTask[task.id].orEmpty(),
         )
-    }
-
-    private fun buildOptionOverride(
-        options: List<TaskOptionDescriptor>,
-        selectedByOption: Map<String, Set<String>>,
-        inputValuesByOption: Map<String, Map<String, String>>,
-    ): String? {
-        if (options.isEmpty()) {
-            return null
-        }
-
-        var merged = JsonObject(emptyMap())
-        var hasOverride = false
-        applyOptionOverrides(
-            options = options,
-            selectedByOption = selectedByOption,
-            inputValuesByOption = inputValuesByOption,
-            onMerge = { overrideJson ->
-                val overrideObject = runCatching {
-                    json.parseToJsonElement(overrideJson).jsonObject
-                }.getOrNull() ?: return@applyOptionOverrides
-                merged = mergeJsonObjects(merged, overrideObject)
-                hasOverride = true
-            },
-        )
-        return if (hasOverride) merged.toString() else null
-    }
-
-    private fun applyOptionOverrides(
-        options: List<TaskOptionDescriptor>,
-        selectedByOption: Map<String, Set<String>>,
-        inputValuesByOption: Map<String, Map<String, String>>,
-        onMerge: (String) -> Unit,
-    ) {
-        options.forEach { option ->
-            when (option.type) {
-                TaskOptionType.Switch,
-                TaskOptionType.Select,
-                TaskOptionType.Checkbox -> {
-                    val selectedCaseNames = selectedByOption[option.id].takeUnless { it.isNullOrEmpty() }
-                        ?: ProjectInterfaceSupport.defaultSelectionForOption(option)
-                    option.cases
-                        .filter { it.name in selectedCaseNames }
-                        .forEach { optionCase ->
-                            onMerge(optionCase.pipelineOverrideJson)
-                            applyOptionOverrides(
-                                options = optionCase.nestedOptions,
-                                selectedByOption = selectedByOption,
-                                inputValuesByOption = inputValuesByOption,
-                                onMerge = onMerge,
-                            )
-                        }
-                }
-
-                TaskOptionType.Input -> {
-                    val values = buildInputValues(option, inputValuesByOption[option.id].orEmpty())
-                    onMerge(applyInputPlaceholders(option.pipelineOverrideJson, values))
-                }
-            }
-        }
     }
 
     private fun validateSelections(
@@ -1224,132 +1135,4 @@ class MainViewModel(
         return scopes
     }
 
-    private fun buildInputValues(
-        option: TaskOptionDescriptor,
-        currentValues: Map<String, String>,
-    ): Map<String, PipelineInputValue> {
-        return option.inputs.associate { input ->
-            input.name to PipelineInputValue(
-                value = currentValues[input.name] ?: input.defaultValue,
-                pipelineType = input.pipelineType,
-            )
-        }
-    }
-
-    private fun applyInputPlaceholders(
-        rawJson: String,
-        values: Map<String, PipelineInputValue>,
-    ): String {
-        if (values.isEmpty() || rawJson.isBlank()) {
-            return rawJson
-        }
-
-        val element = runCatching { json.parseToJsonElement(rawJson) }.getOrNull()
-            ?: return replacePlaceholdersInText(rawJson, values)
-        return replacePlaceholders(element, values).toString()
-    }
-
-    private fun mergeJsonObjects(base: JsonObject, overlay: JsonObject): JsonObject {
-        return buildJsonObject {
-            val keys = base.keys + overlay.keys
-            keys.forEach { key ->
-                val baseValue = base[key]
-                val overlayValue = overlay[key]
-                when {
-                    baseValue is JsonObject && overlayValue is JsonObject -> put(key, mergeJsonObjects(baseValue, overlayValue))
-                    overlayValue != null -> put(key, overlayValue)
-                    baseValue != null -> put(key, baseValue)
-                }
-            }
-        }
-    }
-
-    private fun mergeOverrideJson(baseJson: String?, overlayJson: String?): String? {
-        val base = parseOverrideObject(baseJson)
-        val overlay = parseOverrideObject(overlayJson)
-        return when {
-            base == null && overlay == null -> null
-            base == null -> overlay?.toString()
-            overlay == null -> base.toString()
-            else -> mergeJsonObjects(base, overlay).toString()
-        }
-    }
-
-    private fun parseOverrideObject(rawJson: String?): JsonObject? {
-        if (rawJson.isNullOrBlank()) {
-            return null
-        }
-        return runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull()
-    }
-
-    private fun replacePlaceholders(
-        element: JsonElement,
-        values: Map<String, PipelineInputValue>,
-    ): JsonElement {
-        return when (element) {
-            is JsonObject -> buildJsonObject {
-                element.forEach { (key, value) ->
-                    put(key, replacePlaceholders(value, values))
-                }
-            }
-
-            is JsonArray -> buildJsonArray {
-                element.forEach { item ->
-                    add(replacePlaceholders(item, values))
-                }
-            }
-
-            is JsonPrimitive -> {
-                if (!element.isString) {
-                    element
-                } else {
-                    replaceStringPlaceholder(element.content, values)
-                }
-            }
-
-            else -> element
-        }
-    }
-
-    private fun replaceStringPlaceholder(
-        rawValue: String,
-        values: Map<String, PipelineInputValue>,
-    ): JsonElement {
-        val exactMatch = inputPlaceholderRegex.matchEntire(rawValue)
-        if (exactMatch != null) {
-            val key = exactMatch.groupValues[1]
-            values[key]?.let(::toJsonPrimitive)?.let { return it }
-        }
-        return JsonPrimitive(replacePlaceholdersInText(rawValue, values))
-    }
-
-    private fun replacePlaceholdersInText(
-        rawValue: String,
-        values: Map<String, PipelineInputValue>,
-    ): String {
-        return inputPlaceholderRegex.replace(rawValue) { match ->
-            values[match.groupValues[1]]?.value ?: match.value
-        }
-    }
-
-    private fun toJsonPrimitive(value: PipelineInputValue): JsonPrimitive {
-        return when (value.pipelineType.lowercase()) {
-            "int" -> value.value.toLongOrNull()?.let(::JsonPrimitive)
-                ?: value.value.toDoubleOrNull()?.let(::JsonPrimitive)
-                ?: JsonPrimitive(value.value)
-
-            "bool" -> when (value.value.lowercase()) {
-                "true" -> JsonPrimitive(true)
-                "false" -> JsonPrimitive(false)
-                else -> JsonPrimitive(value.value)
-            }
-
-            else -> JsonPrimitive(value.value)
-        }
-    }
-
-    private data class PipelineInputValue(
-        val value: String,
-        val pipelineType: String,
-    )
 }
