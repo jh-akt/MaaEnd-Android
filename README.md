@@ -1,12 +1,29 @@
 # MaaEnd Android
 
+## 共用框架同步（1.1.0）
+
+界面、主题、保亮／息屏恢复、Root 会话、预览触控与更新生命周期统一使用
+`MaaHostActivity`。沿用原设置存储 `maaend_android_settings`，保留任务勾选、参数和配置导入导出。
+ADB 支持的任务排在前面，不支持的任务排在后面并禁止执行。
+全局／资源配置由共用宿主处理；单任务和预设均保留 `AndroidOpenGame` 前置规则。
+
+“自动更新上游资源”默认开启：应用在前台每 6 小时检查一次，任务准备、运行和停止
+期间延后，失败后 30 分钟重试；首页也可手动更新。沿用下方指定的上游资源仓库及
+子模块，同步成功后下次准备运行时生效。此模式不更新宿主 APK 或替换 Android
+原生运行时；需要本地适配时可通过 manifest 的 `local_overlay_path` 接入框架覆盖规则。
+
+克隆后执行 `git submodule update --init --recursive`。使用 JDK 21、Android SDK 36、
+NDK 27.0.12077973 与 CMake 3.22.1 构建；GitHub CI 完成构建后提供 Debug APK。
+本轮验收覆盖构建和自动化测试，未进行手机任务测试。
+
+
 <p align="center">
   <img alt="MaaEnd Android app icon" src="docs/branding/app-icon-1024.png" width="160" height="160" />
 </p>
 
 `MaaEnd Android` 是一个面向已 Root Android 设备的 `MaaEnd` 宿主应用。它负责在手机上准备运行时、拉起 Root Runtime、同步上游任务资源、展示预览与日志，并直接执行 `MaaEnd` 任务。
 
-当前工程版本：`1.0.4`
+当前工程版本：`1.1.0`
 
 ## 项目定位
 
@@ -72,7 +89,12 @@
 
 ### 1. 准备运行时
 
-本地构建默认读取 `runtime/`，也可以通过 `maafwRuntimeDir` 或 `maafwRuntimeUrl` 覆盖。正式专用 Runtime 由 GitHub Actions 的 `Publish Android Runtime` 手动工作流生成并发布，包含：
+默认构建按 `runtime.lock.json` 下载并校验已发布的 v1.0.4 APK，仅提取其中成套的 Android
+Agent 和 MaaFramework 动态库到 `build/preparedRuntime/`。不会复用旧版 Activity 或 DEX。
+该基线避免了本地 `runtime/` 仅有 Agent 时仍打出缺失动态库的安装包；构建现在强制要求
+`libMaaFramework.so`，CI 另行检查 APK 中的 Agent 和关键原生库。
+需要自建运行时时可通过 `-PmaafwRuntimeDir=...` 或 `maafwRuntimeUrl` 覆盖。
+`Publish Android Runtime` 手动工作流可用于另外重建并发布专用运行时。运行时包含：
 
 - `runtime/agent/go-service`
 - `runtime/agent/maa-go-runner`
@@ -111,7 +133,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 仓库结构
 
-- `app/`：应用品牌、清单、ViewModel 适配与 MaaEnd 特有策略；通用 Root/宿主 UI 来自框架 submodule
+- `app/`：应用品牌、清单与 MaaEnd 特有策略；通用 Root/宿主 UI 来自框架 submodule
 - `MaaFramework-Android/`：Git submodule，提供 `framework`、`framework-host`、`framework-ui` 和 Runtime Gradle 插件
 - `runtime/`：随 APK 一起打包或运行前准备的 Android 运行时二进制
 - `tools/`：运行时准备脚本和 `go-runner`

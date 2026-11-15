@@ -16,12 +16,19 @@ val signingProperties = Properties().apply {
     }
 }
 
+val runtimeProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+val hasRuntimeOverride = listOf("maafwRuntimeDir", "maafwRuntimeUrl").any {
+    providers.gradleProperty(it).isPresent || runtimeProperties.containsKey(it)
+}
+
 maaRuntime {
-    localDirectory.set("runtime")
+    localDirectory.set(if (hasRuntimeOverride) "runtime" else "build/preparedRuntime")
     releaseRepo.set("jh-akt/MaaEnd-Android")
     releaseTag.set("android-runtime-v1")
     releaseAsset.set("maaend-android-runtime-arm64-v8a.zip")
-    requireMaaFramework.set(false)
+    requireMaaFramework.set(true)
 }
 
 android {
@@ -32,8 +39,8 @@ android {
         applicationId = "com.maaend.android"
         minSdk = 30
         targetSdk = 36
-        versionCode = 10004
-        versionName = "1.0.4"
+        versionCode = 10100
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
@@ -121,4 +128,16 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     testImplementation("junit:junit:4.13.2")
+}
+
+val prepareMaaEndRuntime by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir)
+    commandLine("python3", "tools/prepare_bundled_runtime.py")
+    inputs.file(rootProject.file("runtime.lock.json"))
+    inputs.file(rootProject.file("tools/prepare_bundled_runtime.py"))
+    outputs.dir(rootProject.file("build/preparedRuntime"))
+}
+
+if (!hasRuntimeOverride) {
+    tasks.named("resolveAndroidRuntime") { dependsOn(prepareMaaEndRuntime) }
 }

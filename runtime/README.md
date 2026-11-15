@@ -1,6 +1,7 @@
-This directory is the local development fallback consumed by the shared Runtime Gradle plugin:
+This directory is retained for local development overrides. To use a complete
+runtime here, pass `-PmaafwRuntimeDir=runtime` to Gradle. It must contain both the
+Android arm64 agents and `maafw/libMaaFramework.so` with its dependencies.
 
-- `agent/go-service` - Android arm64 build of `agent/go-service`
-- `maafw/` - MaaFramework Android runtime files required by the Go agent
-
-The manually triggered `Publish Android Runtime` workflow rebuilds the project-specific agents, merges the verified MaaFramework Android libraries, and publishes the authoritative zip plus SHA-256 checksum. Local files here are not used as release provenance.
+Default builds instead restore the verified runtime pinned by `runtime.lock.json`
+into `build/preparedRuntime/`. The `Publish Android Runtime` workflow remains an
+optional way to rebuild the project-specific agents and publish a separate runtime.

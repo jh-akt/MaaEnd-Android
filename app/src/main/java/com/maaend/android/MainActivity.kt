@@ -1,43 +1,11 @@
 package com.maaend.android
 
-import android.os.Build
-import android.os.Bundle
-import android.view.WindowManager
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.viewModels
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
-import com.maaend.android.ui.MaaEndApp
-import com.maaend.android.ui.MainViewModel
-import com.maaframework.android.model.shouldKeepScreenOn
-import kotlinx.coroutines.launch
+import com.maaframework.android.host.MaaHostPolicies
+import com.maaframework.android.ui.MaaHostActivity
 
-class MainActivity : ComponentActivity() {
-    private val mainViewModel: MainViewModel by viewModels()
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        observeKeepScreenOn()
-        setContent {
-            MaaEndApp(viewModel = mainViewModel)
-        }
-    }
-
-    private fun observeKeepScreenOn() {
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                mainViewModel.uiState.collect { state ->
-                    val keepScreenOn = state.runtimeState.shouldKeepScreenOn()
-
-                    if (keepScreenOn) {
-                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    } else {
-                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    }
-                }
-            }
-        }
-    }
+class MainActivity : MaaHostActivity() {
+    override val hostVersionName: String = BuildConfig.VERSION_NAME
+    override val hostPreferencesName: String = "maaend_android_settings"
+    override val hostPolicy = MaaHostPolicies.MaaEnd
+    override fun hostUiConfig(appName: String) = super.hostUiConfig(appName).copy(showManualOverride = false)
 }

@@ -13,3 +13,6 @@ app/.cxx/
 runtime/agent/go-service
 runtime/maafw/
 runtime/runtime-manifest.json
+
+__pycache__/
+*.py[cod]
