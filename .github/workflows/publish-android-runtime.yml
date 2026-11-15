@@ -34,6 +34,10 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - name: Install Android NDK
         run: sdkmanager "ndk;$NDK_VERSION"
       - name: Fetch MaaEnd source
