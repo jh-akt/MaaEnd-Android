@@ -18,6 +18,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+      - name: Check portable source paths
+        run: python3 MaaFramework-Android/tools/check_portable_paths.py .
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

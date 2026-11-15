@@ -264,16 +264,15 @@ Guidelines:
 Rebuild:
 
 ```bash
-JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" \
-ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" \
-ANDROID_HOME="$HOME/Library/Android/sdk" \
+: "${JAVA_HOME:?Set JAVA_HOME to your JDK 21 installation}"
+: "${ANDROID_HOME:?Set ANDROID_HOME to your Android SDK}"
 sh gradlew :app:assembleDebug
 ```
 
 Install:
 
 ```bash
-$HOME/Library/Android/sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
+"$ANDROID_HOME/platform-tools/adb" install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 If `adb` says no device:

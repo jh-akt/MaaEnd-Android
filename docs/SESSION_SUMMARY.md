@@ -49,15 +49,13 @@ Symptom:
 
 Rule:
 
-- Use Homebrew `openjdk@21` for this repo unless Gradle/AGP is deliberately upgraded.
+- Use JDK 21 via `JAVA_HOME` for this repo unless Gradle/AGP is deliberately upgraded.
 
 Build command:
 
 ```bash
-JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" \
-PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH" \
-ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" \
-ANDROID_HOME="$HOME/Library/Android/sdk" \
+: "${JAVA_HOME:?Set JAVA_HOME to your JDK 21 installation}"
+: "${ANDROID_HOME:?Set ANDROID_HOME to your Android SDK}"
 sh gradlew :app:assembleDebug
 ```
 

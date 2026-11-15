@@ -132,21 +132,19 @@ def main() -> int:
 
     manifest: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "output_dir": str(output_dir),
+        "runtime_root": output_dir.name,
     }
     if maaend_root is not None:
-        manifest["maaend_root"] = str(maaend_root)
-    if go_service_dir is not None:
-        manifest["go_service_source_dir"] = str(go_service_dir)
+        manifest["project"] = maaend_root.name
 
     if not args.skip_go:
         runner_binary = stage_runner(args.go_exe, RUNNER_SOURCE_DIR, output_dir / "agent")
-        manifest["runner"] = str(runner_binary)
+        manifest["runner"] = runner_binary.relative_to(output_dir).as_posix()
         if go_service_dir is not None:
             if not go_service_dir.exists():
                 raise FileNotFoundError(f"go-service source dir not found: {go_service_dir}")
             go_binary = stage_go_service(args.go_exe, go_service_dir, output_dir / "agent")
-            manifest["go_service"] = str(go_binary)
+            manifest["go_service"] = go_binary.relative_to(output_dir).as_posix()
         else:
             prebuilt_go_service = output_dir / "agent" / "go-service"
             if not prebuilt_go_service.exists():
@@ -154,12 +152,12 @@ def main() -> int:
                     "go-service source dir not provided. Pass --go-service-dir or --maaend-root, "
                     "or use --skip-go after staging runtime/agent/go-service yourself.",
                 )
-            manifest["go_service"] = str(prebuilt_go_service)
+            manifest["go_service"] = prebuilt_go_service.relative_to(output_dir).as_posix()
             manifest["go_service_source"] = "prebuilt"
 
     if args.maafw_dir:
         maafw_dir = stage_maafw(args.maafw_dir, output_dir / "maafw")
-        manifest["maafw"] = str(maafw_dir)
+        manifest["maafw"] = maafw_dir.relative_to(output_dir).as_posix()
 
     manifest_path = output_dir / "runtime-manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -118,27 +118,23 @@ For framework/runtime behavior, inspect the submodule:
 Use JDK 21 for this repository unless Gradle/AGP is intentionally upgraded.
 
 ```bash
-JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" \
-PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH" \
-ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" \
-ANDROID_HOME="$HOME/Library/Android/sdk" \
+: "${JAVA_HOME:?Set JAVA_HOME to your JDK 21 installation}"
+: "${ANDROID_HOME:?Set ANDROID_HOME to your Android SDK}"
 sh ./gradlew :app:assembleDebug
 ```
 
 Run framework unit tests through the included submodule:
 
 ```bash
-JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" \
-PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH" \
-ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" \
-ANDROID_HOME="$HOME/Library/Android/sdk" \
+: "${JAVA_HOME:?Set JAVA_HOME to your JDK 21 installation}"
+: "${ANDROID_HOME:?Set ANDROID_HOME to your Android SDK}"
 sh ./gradlew :framework:testDebugUnitTest
 ```
 
 Install and launch the debug app on the known physical device:
 
 ```bash
-ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+ADB="$ANDROID_HOME/platform-tools/adb"
 $ADB -s 382b528f install -r -d app/build/outputs/apk/debug/app-debug.apk
 $ADB -s 382b528f shell am start -n com.maaend.android.debug/com.maaend.android.MainActivity
 ```
@@ -152,10 +148,8 @@ com.maaend.android.debug/com.maaend.android.MainActivity
 Release builds use:
 
 ```bash
-JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" \
-PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH" \
-ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" \
-ANDROID_HOME="$HOME/Library/Android/sdk" \
+: "${JAVA_HOME:?Set JAVA_HOME to your JDK 21 installation}"
+: "${ANDROID_HOME:?Set ANDROID_HOME to your Android SDK}"
 sh ./gradlew :app:assembleRelease
 ```
 
