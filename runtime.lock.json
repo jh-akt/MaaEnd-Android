@@ -1,7 +1,7 @@
 {
   "filename": "maaend-android-runtime-arm64-v8a-5.16.1.zip",
   "url": "https://github.com/jh-akt/MaaEnd-Android/releases/download/android-runtime-5.16.1-r1/maaend-android-runtime-arm64-v8a-5.16.1.zip",
-  "size": 64400151,
-  "sha256": "312db58f6e1a7d4b569515ed6597127b88e65658a0f27a8942084e74baff943d",
+  "size": 64400096,
+  "sha256": "7a2d16debd7acda159ee529b579c50c48d43c0cc0a7127c07906c5d156374b70",
   "source": "MaaFramework 5.16.1; MaaEnd agent 28f1fd2b8b7adec81fb8c863c3007b38e434378a; Android arm64 16 KiB"
 }
