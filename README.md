@@ -90,18 +90,15 @@ NDK 27.0.12077973 与 CMake 3.22.1 构建；GitHub CI 完成构建后提供 Debu
 
 ### 1. 准备运行时
 
-默认构建按 `runtime.lock.json` 下载并校验已发布的 v1.0.4 APK，仅提取其中成套的 Android
-Agent 和 MaaFramework 动态库到 `build/preparedRuntime/`。不会复用旧版 Activity 或 DEX。
-该基线避免了本地 `runtime/` 仅有 Agent 时仍打出缺失动态库的安装包；构建现在强制要求
-`libMaaFramework.so`，CI 另行检查 APK 中的 Agent 和关键原生库。
+默认构建按 `runtime.lock.json` 下载并校验独立的 16 KiB Android 运行包，解压到
+`build/preparedRuntime/`。运行库升级为 MaaFramework 5.16.1；Go Agent 从
+`tools/agent-source.lock.json` 指定的上游提交构建，使用 Go 1.26.10 和 NDK 27.0.12077973。
+`go-service`、`maa-go-runner` 以及所有 `.so` 都经过 16 KiB LOAD/RELRO 校验。
+CI 同时检查最终 APK 的全部 ELF（包含 assets）与 ZIP 对齐。
+
 需要自建运行时时可通过 `-PmaafwRuntimeDir=...` 或 `maafwRuntimeUrl` 覆盖。
-`Publish Android Runtime` 手动工作流可用于另外重建并发布专用运行时。运行时包含：
-
-- `runtime/agent/go-service`
-- `runtime/agent/maa-go-runner`
-- `runtime/maafw/`
-
-工作流会从 MaaEnd 上游构建 Android API 30 / arm64 agent，合并已校验的 MaaFramework `.so`，验证 ELF interpreter 为 `/system/bin/linker64`，并发布 zip 与 `.sha256`。
+`Publish Android Runtime` 手动工作流按锁定源码重建并发布独立运行包；更换内容时应使用新 tag。
+资源自动更新和本地覆盖继续独立生效。静态检查不替代 16 KiB Android 设备上的运行测试。
 
 其中：
 

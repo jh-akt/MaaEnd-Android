@@ -26,8 +26,8 @@ val hasRuntimeOverride = listOf("maafwRuntimeDir", "maafwRuntimeUrl").any {
 maaRuntime {
     localDirectory.set(if (hasRuntimeOverride) "runtime" else "build/preparedRuntime")
     releaseRepo.set("jh-akt/MaaEnd-Android")
-    releaseTag.set("android-runtime-v1")
-    releaseAsset.set("maaend-android-runtime-arm64-v8a.zip")
+    releaseTag.set("android-runtime-5.16.1-r1")
+    releaseAsset.set("maaend-android-runtime-arm64-v8a-5.16.1.zip")
     requireMaaFramework.set(true)
 }
 
@@ -39,8 +39,8 @@ android {
         applicationId = "com.maaend.android"
         minSdk = 30
         targetSdk = 36
-        versionCode = 10100
-        versionName = "1.1.0"
+        versionCode = 10101
+        versionName = "1.1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {

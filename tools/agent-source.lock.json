@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/MaaEnd/MaaEnd.git",
+  "commit": "28f1fd2b8b7adec81fb8c863c3007b38e434378a",
+  "binding": "v4.0.0-beta.19",
+  "path": "agent/go-service"
+}

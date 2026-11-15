@@ -33,7 +33,7 @@ jobs:
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
       - uses: actions/cache@v4
         with:
-          path: .cache/*.apk
+          path: .cache/*.zip
           key: maaend-runtime-${{ hashFiles('runtime.lock.json') }}
       - name: Test runtime extraction
         run: python3 -m unittest discover -s tools -p 'test_*.py'
@@ -41,6 +41,9 @@ jobs:
         run: ./gradlew :app:assembleDebug :app:testDebugUnitTest :framework:testDebugUnitTest :framework-host:testDebugUnitTest --no-daemon
       - name: Verify packaged runtime
         run: python3 tools/prepare_bundled_runtime.py --verify-apk app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify APK ZIP alignment
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MaaEnd-Android-debug

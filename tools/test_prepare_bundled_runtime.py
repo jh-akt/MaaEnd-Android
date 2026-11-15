@@ -12,8 +12,8 @@ class RuntimeExtractionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, io.BytesIO() as buffer:
             with zipfile.ZipFile(buffer, "w") as archive:
                 archive.writestr("classes.dex", b"old host")
-                archive.writestr("assets/bundled_runtime/runtime-manifest.json", b"old paths")
-                archive.writestr("assets/bundled_runtime/agent/go-service", b"agent")
+                archive.writestr("runtime-manifest.json", b"old paths")
+                archive.writestr("agent/go-service", b"agent")
             with zipfile.ZipFile(buffer) as archive:
                 extract(archive, Path(temp))
             self.assertEqual(["agent/go-service"], [p.relative_to(temp).as_posix() for p in Path(temp).rglob("*") if p.is_file()])
@@ -21,7 +21,7 @@ class RuntimeExtractionTest(unittest.TestCase):
     def test_rejects_paths_outside_runtime(self):
         with tempfile.TemporaryDirectory() as temp, io.BytesIO() as buffer:
             with zipfile.ZipFile(buffer, "w") as archive:
-                archive.writestr("assets/bundled_runtime/agent/../../escape", b"unsafe")
+                archive.writestr("agent/../../escape", b"unsafe")
             with zipfile.ZipFile(buffer) as archive, self.assertRaises(ValueError):
                 extract(archive, Path(temp))
 

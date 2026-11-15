@@ -1,6 +1,7 @@
 {
-  "url": "https://github.com/jh-akt/MaaEnd-Android/releases/download/v1.0.4/MaaEnd-Android-v1.0.4.apk",
-  "size": 128715332,
-  "sha256": "6248ba4798fd18bd1e457f1b65be99da9d008dea3fac465ee60632441cf6fa62",
-  "source": "MaaEnd-Android v1.0.4 bundled Android arm64 runtime"
+  "filename": "maaend-android-runtime-arm64-v8a-5.16.1.zip",
+  "url": "https://github.com/jh-akt/MaaEnd-Android/releases/download/android-runtime-5.16.1-r1/maaend-android-runtime-arm64-v8a-5.16.1.zip",
+  "size": 64400151,
+  "sha256": "312db58f6e1a7d4b569515ed6597127b88e65658a0f27a8942084e74baff943d",
+  "source": "MaaFramework 5.16.1; MaaEnd agent 28f1fd2b8b7adec81fb8c863c3007b38e434378a; Android arm64 16 KiB"
 }
