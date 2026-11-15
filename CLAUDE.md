@@ -12,8 +12,8 @@ Make reusable fixes in the sibling framework repository first, then advance the
 submodule. Resource updates use the existing source repository and optional local
 overlays; the host APK and native runtime are upgraded separately.
 
-MaaEnd keeps `MaaHostPolicies.MaaEnd` for task/preset ordering and hides the manual
-override editor. `runtime.lock.json` and `tools/prepare_bundled_runtime.py` restore
+MaaEnd keeps `MaaHostPolicies.MaaEnd` for task/preset ordering and uses the default
+shared manual override editor. `runtime.lock.json` and `tools/prepare_bundled_runtime.py` restore
 the complete pinned Android runtime for clean builds; incomplete agent-only local
 directories are not accepted. Explicit runtime overrides must include native libs.
 
